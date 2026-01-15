@@ -1,0 +1,94 @@
+# Environment and local configuration
+.env.local
+.env
+.env.*.local
+*.local.env
+
+# Local development infrastructure
+local/db/
+local/s3/
+local/mail/
+local/docker-compose.yml
+
+# Temporary files
+tmpclaude-*
+*.tmp
+*.temp
+
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Testing
+coverage/
+*.lcov
+.nyc_output/
+test-results/
+playwright-report/
+
+# Build outputs
+dist/
+build/
+out/
+.next/
+.turbo/
+*.tsbuildinfo
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+.pnpm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*.swo
+*~
+
+# IDEs
+.vscode/
+.idea/
+*.sublime-*
+*.iml
+
+# AWS/Cloud
+.aws/
+cdk.out/
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+
+# Mobile specific
+mobile/android/app/build/
+mobile/ios/Pods/
+mobile/.expo/
+mobile/.expo-shared/
+
+# Generated files
+*.generated.*
+*.gen.*
+
+# Secrets
+*.key
+*.pem
+*.crt
+*.p12
+secrets/
+credentials/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Evidence/uploads (local development)
+uploads/
+evidence/
