@@ -1,0 +1,56 @@
+{
+  "expo": {
+    "name": "Cedar Terrace Mobile",
+    "slug": "cedar-terrace-mobile",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.cedarterrace.mobile",
+      "infoPlist": {
+        "NSCameraUsageDescription": "This app needs access to your camera to capture evidence photos of parking violations.",
+        "NSPhotoLibraryUsageDescription": "This app needs access to your photo library to save evidence photos."
+      }
+    },
+    "android": {
+      "package": "com.cedarterrace.mobile",
+      "permissions": [
+        "CAMERA",
+        "WRITE_EXTERNAL_STORAGE",
+        "READ_EXTERNAL_STORAGE"
+      ],
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#ffffff"
+      },
+      "edgeToEdgeEnabled": true,
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow Cedar Terrace to access your camera to capture evidence photos."
+        }
+      ],
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "Allow Cedar Terrace to access your photo library to save evidence photos.",
+          "savePhotosPermission": "Allow Cedar Terrace to save evidence photos to your photo library."
+        }
+      ]
+    ]
+  }
+}
