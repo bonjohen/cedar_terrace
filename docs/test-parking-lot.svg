@@ -1,0 +1,98 @@
+<svg width="1200" height="800" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background -->
+  <rect width="1200" height="800" fill="#4a5568"/>
+
+  <!-- Title -->
+  <text x="600" y="50" font-family="Arial" font-size="24" fill="white" text-anchor="middle" font-weight="bold">
+    Cedar Terrace Test Parking Lot
+  </text>
+
+  <!-- Legend -->
+  <g id="legend" transform="translate(50, 80)">
+    <text font-family="Arial" font-size="14" fill="white" font-weight="bold">Legend:</text>
+    <circle cx="10" cy="30" r="8" fill="#60a5fa" stroke="white" stroke-width="2"/>
+    <text x="25" y="35" font-family="Arial" font-size="12" fill="white">Handicapped</text>
+
+    <circle cx="120" cy="30" r="8" fill="#34d399" stroke="white" stroke-width="2"/>
+    <text x="135" y="35" font-family="Arial" font-size="12" fill="white">Open</text>
+
+    <circle cx="200" cy="30" r="8" fill="#fbbf24" stroke="white" stroke-width="2"/>
+    <text x="215" y="35" font-family="Arial" font-size="12" fill="white">Purchased</text>
+
+    <circle cx="310" cy="30" r="8" fill="#f59e0b" stroke="white" stroke-width="2"/>
+    <text x="325" y="35" font-family="Arial" font-size="12" fill="white">Reserved</text>
+  </g>
+
+  <!-- Row 1 Label -->
+  <text x="50" y="210" font-family="Arial" font-size="14" fill="white" font-weight="bold">Row 1:</text>
+
+  <!-- Row 1 - Handicapped H1 -->
+  <circle cx="150" cy="200" r="60" fill="#60a5fa" stroke="white" stroke-width="3"/>
+  <text x="150" y="195" font-family="Arial" font-size="20" fill="white" text-anchor="middle" font-weight="bold">H1</text>
+  <text x="150" y="215" font-family="Arial" font-size="12" fill="white" text-anchor="middle">♿</text>
+
+  <!-- Row 1 - Handicapped H2 -->
+  <circle cx="300" cy="200" r="60" fill="#60a5fa" stroke="white" stroke-width="3"/>
+  <text x="300" y="195" font-family="Arial" font-size="20" fill="white" text-anchor="middle" font-weight="bold">H2</text>
+  <text x="300" y="215" font-family="Arial" font-size="12" fill="white" text-anchor="middle">♿</text>
+
+  <!-- Row 1 - Open 3 -->
+  <circle cx="450" cy="200" r="60" fill="#34d399" stroke="white" stroke-width="3"/>
+  <text x="450" y="205" font-family="Arial" font-size="20" fill="white" text-anchor="middle" font-weight="bold">3</text>
+
+  <!-- Row 1 - Open 4 -->
+  <circle cx="600" cy="200" r="60" fill="#34d399" stroke="white" stroke-width="3"/>
+  <text x="600" y="205" font-family="Arial" font-size="20" fill="white" text-anchor="middle" font-weight="bold">4</text>
+
+  <!-- Row 1 - Purchased P5 -->
+  <circle cx="750" cy="200" r="60" fill="#fbbf24" stroke="white" stroke-width="3"/>
+  <text x="750" y="195" font-family="Arial" font-size="20" fill="white" text-anchor="middle" font-weight="bold">P5</text>
+  <text x="750" y="215" font-family="Arial" font-size="10" fill="white" text-anchor="middle">Unit 101</text>
+
+  <!-- Row 1 - Purchased P6 -->
+  <circle cx="900" cy="200" r="60" fill="#fbbf24" stroke="white" stroke-width="3"/>
+  <text x="900" y="195" font-family="Arial" font-size="20" fill="white" text-anchor="middle" font-weight="bold">P6</text>
+  <text x="900" y="215" font-family="Arial" font-size="10" fill="white" text-anchor="middle">Unit 102</text>
+
+  <!-- Row 2 Label -->
+  <text x="50" y="610" font-family="Arial" font-size="14" fill="white" font-weight="bold">Row 2:</text>
+
+  <!-- Row 2 - Open 7 -->
+  <circle cx="150" cy="600" r="60" fill="#34d399" stroke="white" stroke-width="3"/>
+  <text x="150" y="605" font-family="Arial" font-size="20" fill="white" text-anchor="middle" font-weight="bold">7</text>
+
+  <!-- Row 2 - Open 8 -->
+  <circle cx="300" cy="600" r="60" fill="#34d399" stroke="white" stroke-width="3"/>
+  <text x="300" y="605" font-family="Arial" font-size="20" fill="white" text-anchor="middle" font-weight="bold">8</text>
+
+  <!-- Row 2 - Reserved R9 -->
+  <circle cx="450" cy="600" r="60" fill="#f59e0b" stroke="white" stroke-width="3"/>
+  <text x="450" y="595" font-family="Arial" font-size="20" fill="white" text-anchor="middle" font-weight="bold">R9</text>
+  <text x="450" y="615" font-family="Arial" font-size="10" fill="white" text-anchor="middle">Mgmt</text>
+
+  <!-- Row 2 - Purchased P10 -->
+  <circle cx="600" cy="600" r="60" fill="#fbbf24" stroke="white" stroke-width="3"/>
+  <text x="600" y="595" font-family="Arial" font-size="20" fill="white" text-anchor="middle" font-weight="bold">P10</text>
+  <text x="600" y="615" font-family="Arial" font-size="10" fill="white" text-anchor="middle">Unit 103</text>
+
+  <!-- Row 2 - Purchased P11 -->
+  <circle cx="750" cy="600" r="60" fill="#fbbf24" stroke="white" stroke-width="3"/>
+  <text x="750" y="595" font-family="Arial" font-size="20" fill="white" text-anchor="middle" font-weight="bold">P11</text>
+  <text x="750" y="615" font-family="Arial" font-size="10" fill="white" text-anchor="middle">Unit 104</text>
+
+  <!-- Row 2 - Open 12 -->
+  <circle cx="900" cy="600" r="60" fill="#34d399" stroke="white" stroke-width="3"/>
+  <text x="900" y="605" font-family="Arial" font-size="20" fill="white" text-anchor="middle" font-weight="bold">12</text>
+
+  <!-- Info Box -->
+  <rect x="50" y="700" width="1100" height="80" fill="#1f2937" stroke="white" stroke-width="2" rx="5"/>
+  <text x="600" y="725" font-family="Arial" font-size="14" fill="white" text-anchor="middle" font-weight="bold">
+    Test Parking Lot: 12 Spaces Total
+  </text>
+  <text x="600" y="745" font-family="Arial" font-size="12" fill="white" text-anchor="middle">
+    2 Handicapped (H1, H2) • 5 Open (3, 4, 7, 8, 12) • 4 Purchased (P5, P6, P10, P11) • 1 Reserved (R9)
+  </text>
+  <text x="600" y="765" font-family="Arial" font-size="10" fill="#9ca3af" text-anchor="middle">
+    Each circle represents 60px radius (120px diameter) • Coordinates shown in test-parking-lot.md
+  </text>
+</svg>
