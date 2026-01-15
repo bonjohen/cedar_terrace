@@ -1,0 +1,233 @@
+digraph CedarTerraceProjectPlan {
+    rankdir=TB;
+    node [shape=box, style=rounded];
+
+    // Styling
+    node [fontname="Arial", fontsize=10];
+    edge [fontname="Arial", fontsize=9];
+
+    // Start node
+    START [label="Create GitHub Project\n& Repository Setup", shape=ellipse, style=filled, fillcolor=lightgreen];
+
+    // Foundation layer
+    REPO_STRUCTURE [label="Monorepo Structure\n- Package layout\n- Build config\n- Linting/formatting"];
+    DOMAIN_MODELS [label="Domain Models\n- TypeScript interfaces\n- Entity definitions\n- DTOs"];
+    DB_SCHEMA [label="Database Schema\n- PostgreSQL tables\n- Indexes\n- Migration framework"];
+    IaC_FOUNDATION [label="IaC Foundation\n- AWS CDK/Terraform setup\n- Environment config\n- Shared resources"];
+
+    // Core domain logic
+    POSITION_LOGIC [label="Parking Position Logic\n- Circle geometry\n- Type rules\n- Soft delete"];
+    OBSERVATION_LOGIC [label="Observation Logic\n- Evidence requirements\n- Immutability\n- Idempotency"];
+    VIOLATION_LOGIC [label="Violation Derivation\n- Category rules\n- Timeline FSM\n- Event system"];
+    HANDICAP_LOGIC [label="Handicapped Logic\n- Progressive evidence\n- Resolution rules"];
+
+    // Infrastructure services
+    AUTH_SERVICE [label="Authentication\n- Cognito setup\n- Admin auth\n- Recipient auth"];
+    STORAGE_SERVICE [label="Storage Service\n- S3 buckets\n- Pre-signed URLs\n- Evidence upload"];
+    QUEUE_SERVICE [label="Queue Service\n- SQS setup\n- Worker framework\n- Job types"];
+
+    // API layer
+    API_FOUNDATION [label="API Foundation\n- API Gateway\n- Lambda handlers\n- Middleware"];
+    POSITION_API [label="Position APIs\n- CRUD endpoints\n- Validation"];
+    OBSERVATION_API [label="Observation APIs\n- Submit endpoint\n- Idempotency\n- Evidence ingestion"];
+    VIOLATION_API [label="Violation APIs\n- Query endpoints\n- Timeline events\n- State queries"];
+    NOTICE_API [label="Notice APIs\n- Issuance\n- QR token gen\n- Payload storage"];
+    TICKET_API [label="Ticket Portal APIs\n- Auth flow\n- Profile gating\n- Read-only access"];
+
+    // Async workers
+    TIMELINE_WORKER [label="Timeline Worker\n- Scheduled evaluation\n- State transitions\n- Event emission"];
+    EMAIL_WORKER [label="Email Worker\n- Activation emails\n- Templates"];
+    INGESTION_WORKER [label="Ingestion Worker\n- Offline sync\n- Reconciliation"];
+
+    // Admin web app
+    ADMIN_FOUNDATION [label="Admin Web Foundation\n- React/SPA setup\n- Routing\n- State management"];
+    LOT_EDITOR [label="Lot Editor UI\n- Image overlay\n- Circle manipulation\n- Position CRUD"];
+    OBSERVATION_UI [label="Observation UI\n- Search\n- Detail view\n- Evidence display"];
+    VIOLATION_UI [label="Violation UI\n- List/search\n- Timeline view\n- Notice issuance"];
+    ADMIN_DEPLOYMENT [label="Admin Deployment\n- S3/CloudFront\n- Build pipeline"];
+
+    // Mobile app
+    MOBILE_FOUNDATION [label="Mobile App Foundation\n- Framework choice\n- Offline storage\n- Camera integration"];
+    CAPTURE_FLOW [label="Capture Flow\n- Photo capture\n- Field extraction\n- Review/edit"];
+    OFFLINE_QUEUE [label="Offline Queue\n- Local persistence\n- Sync logic\n- Retry handling"];
+    MOBILE_BUILD [label="Mobile Build\n- App packaging\n- Distribution"];
+
+    // Ticket recipient portal
+    TICKET_FOUNDATION [label="Ticket Portal Foundation\n- Web UI setup\n- QR routing"];
+    RECIPIENT_AUTH_UI [label="Recipient Auth Flow\n- Email entry\n- Activation\n- Profile form"];
+    TICKET_DETAIL_UI [label="Ticket Detail UI\n- Violation display\n- Evidence view\n- Resolution info"];
+    TICKET_DEPLOYMENT [label="Ticket Deployment\n- S3/CloudFront\n- Build pipeline"];
+
+    // Testing
+    UNIT_TESTS [label="Unit Tests\n- Domain logic\n- Timeline FSM\n- Idempotency"];
+    INTEGRATION_TESTS [label="Integration Tests\n- End-to-end flows\n- Offline sync\n- Auth gating"];
+
+    // Dependencies from START
+    START -> REPO_STRUCTURE;
+    START -> IaC_FOUNDATION;
+
+    // Foundation dependencies
+    REPO_STRUCTURE -> DOMAIN_MODELS;
+    REPO_STRUCTURE -> DB_SCHEMA;
+    DOMAIN_MODELS -> POSITION_LOGIC;
+    DOMAIN_MODELS -> OBSERVATION_LOGIC;
+    DOMAIN_MODELS -> VIOLATION_LOGIC;
+    DOMAIN_MODELS -> HANDICAP_LOGIC;
+    DB_SCHEMA -> POSITION_LOGIC;
+    DB_SCHEMA -> OBSERVATION_LOGIC;
+    DB_SCHEMA -> VIOLATION_LOGIC;
+
+    // Core logic dependencies
+    POSITION_LOGIC -> VIOLATION_LOGIC;
+    OBSERVATION_LOGIC -> VIOLATION_LOGIC;
+    VIOLATION_LOGIC -> HANDICAP_LOGIC;
+
+    // Infrastructure dependencies
+    IaC_FOUNDATION -> AUTH_SERVICE;
+    IaC_FOUNDATION -> STORAGE_SERVICE;
+    IaC_FOUNDATION -> QUEUE_SERVICE;
+    IaC_FOUNDATION -> API_FOUNDATION;
+
+    // API layer dependencies
+    API_FOUNDATION -> POSITION_API;
+    API_FOUNDATION -> OBSERVATION_API;
+    API_FOUNDATION -> VIOLATION_API;
+    API_FOUNDATION -> NOTICE_API;
+    API_FOUNDATION -> TICKET_API;
+
+    POSITION_LOGIC -> POSITION_API;
+    OBSERVATION_LOGIC -> OBSERVATION_API;
+    VIOLATION_LOGIC -> VIOLATION_API;
+    VIOLATION_LOGIC -> NOTICE_API;
+
+    AUTH_SERVICE -> POSITION_API;
+    AUTH_SERVICE -> OBSERVATION_API;
+    AUTH_SERVICE -> VIOLATION_API;
+    AUTH_SERVICE -> NOTICE_API;
+    AUTH_SERVICE -> TICKET_API;
+
+    STORAGE_SERVICE -> OBSERVATION_API;
+    STORAGE_SERVICE -> TICKET_API;
+
+    // Worker dependencies
+    QUEUE_SERVICE -> TIMELINE_WORKER;
+    QUEUE_SERVICE -> EMAIL_WORKER;
+    QUEUE_SERVICE -> INGESTION_WORKER;
+
+    VIOLATION_LOGIC -> TIMELINE_WORKER;
+    OBSERVATION_LOGIC -> INGESTION_WORKER;
+    AUTH_SERVICE -> EMAIL_WORKER;
+
+    // Admin web dependencies
+    REPO_STRUCTURE -> ADMIN_FOUNDATION;
+    ADMIN_FOUNDATION -> LOT_EDITOR;
+    ADMIN_FOUNDATION -> OBSERVATION_UI;
+    ADMIN_FOUNDATION -> VIOLATION_UI;
+
+    POSITION_API -> LOT_EDITOR;
+    OBSERVATION_API -> OBSERVATION_UI;
+    VIOLATION_API -> VIOLATION_UI;
+    NOTICE_API -> VIOLATION_UI;
+
+    LOT_EDITOR -> ADMIN_DEPLOYMENT;
+    OBSERVATION_UI -> ADMIN_DEPLOYMENT;
+    VIOLATION_UI -> ADMIN_DEPLOYMENT;
+
+    // Mobile app dependencies
+    REPO_STRUCTURE -> MOBILE_FOUNDATION;
+    MOBILE_FOUNDATION -> CAPTURE_FLOW;
+    MOBILE_FOUNDATION -> OFFLINE_QUEUE;
+
+    DOMAIN_MODELS -> CAPTURE_FLOW;
+    OBSERVATION_API -> OFFLINE_QUEUE;
+    STORAGE_SERVICE -> OFFLINE_QUEUE;
+
+    CAPTURE_FLOW -> MOBILE_BUILD;
+    OFFLINE_QUEUE -> MOBILE_BUILD;
+
+    // Ticket portal dependencies
+    REPO_STRUCTURE -> TICKET_FOUNDATION;
+    TICKET_FOUNDATION -> RECIPIENT_AUTH_UI;
+    TICKET_FOUNDATION -> TICKET_DETAIL_UI;
+
+    TICKET_API -> RECIPIENT_AUTH_UI;
+    TICKET_API -> TICKET_DETAIL_UI;
+
+    RECIPIENT_AUTH_UI -> TICKET_DEPLOYMENT;
+    TICKET_DETAIL_UI -> TICKET_DEPLOYMENT;
+
+    // Testing dependencies
+    POSITION_LOGIC -> UNIT_TESTS;
+    OBSERVATION_LOGIC -> UNIT_TESTS;
+    VIOLATION_LOGIC -> UNIT_TESTS;
+    HANDICAP_LOGIC -> UNIT_TESTS;
+
+    OBSERVATION_API -> INTEGRATION_TESTS;
+    VIOLATION_API -> INTEGRATION_TESTS;
+    TICKET_API -> INTEGRATION_TESTS;
+    OFFLINE_QUEUE -> INTEGRATION_TESTS;
+
+    // Visual grouping with subgraphs
+    subgraph cluster_foundation {
+        label = "Foundation";
+        style = filled;
+        fillcolor = "#f0f0f0";
+        REPO_STRUCTURE; DOMAIN_MODELS; DB_SCHEMA; IaC_FOUNDATION;
+    }
+
+    subgraph cluster_domain {
+        label = "Domain Logic";
+        style = filled;
+        fillcolor = "#e8f4f8";
+        POSITION_LOGIC; OBSERVATION_LOGIC; VIOLATION_LOGIC; HANDICAP_LOGIC;
+    }
+
+    subgraph cluster_infra {
+        label = "Infrastructure Services";
+        style = filled;
+        fillcolor = "#fff4e8";
+        AUTH_SERVICE; STORAGE_SERVICE; QUEUE_SERVICE;
+    }
+
+    subgraph cluster_api {
+        label = "API Layer";
+        style = filled;
+        fillcolor = "#f4e8ff";
+        API_FOUNDATION; POSITION_API; OBSERVATION_API; VIOLATION_API; NOTICE_API; TICKET_API;
+    }
+
+    subgraph cluster_workers {
+        label = "Async Workers";
+        style = filled;
+        fillcolor = "#e8ffe8";
+        TIMELINE_WORKER; EMAIL_WORKER; INGESTION_WORKER;
+    }
+
+    subgraph cluster_admin {
+        label = "Admin Web App";
+        style = filled;
+        fillcolor = "#ffe8e8";
+        ADMIN_FOUNDATION; LOT_EDITOR; OBSERVATION_UI; VIOLATION_UI; ADMIN_DEPLOYMENT;
+    }
+
+    subgraph cluster_mobile {
+        label = "Mobile App";
+        style = filled;
+        fillcolor = "#f8e8ff";
+        MOBILE_FOUNDATION; CAPTURE_FLOW; OFFLINE_QUEUE; MOBILE_BUILD;
+    }
+
+    subgraph cluster_ticket {
+        label = "Ticket Portal";
+        style = filled;
+        fillcolor = "#e8fff4";
+        TICKET_FOUNDATION; RECIPIENT_AUTH_UI; TICKET_DETAIL_UI; TICKET_DEPLOYMENT;
+    }
+
+    subgraph cluster_testing {
+        label = "Testing";
+        style = filled;
+        fillcolor = "#ffffe8";
+        UNIT_TESTS; INTEGRATION_TESTS;
+    }
+}
