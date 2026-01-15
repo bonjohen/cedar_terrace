@@ -56,7 +56,6 @@ if (-not (Test-Path $dockerDesktop)) {
     Fail "Docker Desktop not found at expected path"
 }
 
-# --- Docker readiness check (warning-tolerant) ---
 $oldEAP = $ErrorActionPreference
 $ErrorActionPreference = "Continue"
 
@@ -173,22 +172,13 @@ $oldEAP = $ErrorActionPreference
 $ErrorActionPreference = "Continue"
 
 docker compose down --remove-orphans *> $null
-if ($LASTEXITCODE -ne 0) {
-    $ErrorActionPreference = $oldEAP
-    Fail "docker compose down failed"
-}
+if ($LASTEXITCODE -ne 0) { $ErrorActionPreference = $oldEAP; Fail "docker compose down failed" }
 
 docker compose pull *> $null
-if ($LASTEXITCODE -ne 0) {
-    $ErrorActionPreference = $oldEAP
-    Fail "docker compose pull failed"
-}
+if ($LASTEXITCODE -ne 0) { $ErrorActionPreference = $oldEAP; Fail "docker compose pull failed" }
 
 docker compose up -d *> $null
-if ($LASTEXITCODE -ne 0) {
-    $ErrorActionPreference = $oldEAP
-    Fail "docker compose up failed"
-}
+if ($LASTEXITCODE -ne 0) { $ErrorActionPreference = $oldEAP; Fail "docker compose up failed" }
 
 $ErrorActionPreference = $oldEAP
 Pop-Location
@@ -197,6 +187,7 @@ Success "Docker services started"
 
 Section "Database initialization"
 
+$oldEAP = $ErrorActionPreference
 $ErrorActionPreference = "Continue"
 
 $pgReady = $false
@@ -211,9 +202,8 @@ while (-not $pgReady -and $elapsed -lt 60) {
     $elapsed += 2
 }
 
-$ErrorActionPreference = $oldEAP
-
 if (-not $pgReady) {
+    $ErrorActionPreference = $oldEAP
     Fail "Postgres did not become ready"
 }
 
@@ -222,12 +212,26 @@ docker exec parking-postgres psql `
     -d parking_dev `
     -c "CREATE EXTENSION IF NOT EXISTS pgcrypto;" *> $null
 
+if ($LASTEXITCODE -ne 0) {
+    $ErrorActionPreference = $oldEAP
+    Fail "psql extension initialization failed"
+}
+
+$ErrorActionPreference = $oldEAP
 Success "Database ready"
 
 Section "Object storage (MinIO)"
 
+$oldEAP = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+
 docker exec parking-minio mc alias set local http://localhost:9000 minio minio123 *> $null
+if ($LASTEXITCODE -ne 0) { $ErrorActionPreference = $oldEAP; Fail "MinIO alias setup failed" }
+
 docker exec parking-minio mc mb local/parking-evidence --ignore-existing *> $null
+if ($LASTEXITCODE -ne 0) { $ErrorActionPreference = $oldEAP; Fail "MinIO bucket creation failed" }
+
+$ErrorActionPreference = $oldEAP
 Success "S3-compatible storage ready"
 
 Section "Node dependencies"
