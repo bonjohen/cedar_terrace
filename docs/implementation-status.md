@@ -98,6 +98,10 @@
 
 ### Admin Frontend (0%)
 
+⚠️ **Technical Debt**
+- Fix Vite CJS deprecation warning (migrate to ESM in vite.config.ts)
+  - See: https://vite.dev/guide/troubleshooting.html#vite-cjs-node-api-deprecated
+
 📋 **Lot Configuration**
 - Lot image upload
 - Interactive parking position editor
