@@ -17,16 +17,16 @@ describe('Idempotency Integration Tests', () => {
   let parkingPositionService: ParkingPositionService;
   let noticeService: NoticeService;
 
-  beforeAll(async () => {
-    context = await setupTestDatabase();
-    observationService = new ObservationService(context.pool);
-    violationService = new ViolationService(context.pool);
-    parkingPositionService = new ParkingPositionService(context.pool);
-    noticeService = new NoticeService(context.pool, violationService);
+  beforeAll(() => {
+    context = setupTestDatabase();
+    observationService = new ObservationService(context.db);
+    violationService = new ViolationService(context.db);
+    parkingPositionService = new ParkingPositionService(context.db);
+    noticeService = new NoticeService(context.db, violationService);
   });
 
-  afterAll(async () => {
-    await teardownTestDatabase();
+  afterAll(() => {
+    teardownTestDatabase(context);
   });
 
   describe('Observation submission idempotency', () => {
@@ -79,19 +79,17 @@ describe('Idempotency Integration Tests', () => {
       expect(obsId1).toBe(obsId2);
 
       // Verify original data preserved
-      const obs = await context.pool.query(
-        'SELECT vehicle_id FROM observations WHERE id = $1',
-        [obsId1]
-      );
-      expect(obs.rows[0].vehicle_id).toBe(context.vehicleIds.abc123);
+      const obs = context.db
+        .prepare('SELECT vehicle_id FROM observations WHERE id = ?')
+        .get(obsId1) as any;
+      expect(obs.vehicle_id).toBe(context.vehicleIds.abc123);
 
       // Verify evidence is from first submission
-      const evidence = await context.pool.query(
-        'SELECT note_text FROM evidence_items WHERE observation_id = $1',
-        [obsId1]
-      );
-      expect(evidence.rows[0].note_text).toBe('First submission');
-      expect(evidence.rows).toHaveLength(1);
+      const evidence = context.db
+        .prepare('SELECT note_text FROM evidence_items WHERE observation_id = ?')
+        .all(obsId1) as any[];
+      expect(evidence[0].note_text).toBe('First submission');
+      expect(evidence).toHaveLength(1);
     });
 
     it('should handle concurrent requests with same idempotency key', async () => {
@@ -130,11 +128,12 @@ describe('Idempotency Integration Tests', () => {
       expect(uniqueIds.size).toBe(1);
 
       // Verify only one observation was created
-      const observations = await context.pool.query(
-        'SELECT COUNT(*) as count FROM observations WHERE vehicle_id = $1 AND parking_position_id = $2',
-        [context.vehicleIds.abc123, context.positionIds.open3]
-      );
-      expect(parseInt(observations.rows[0].count)).toBe(1);
+      const observations = context.db
+        .prepare(
+          'SELECT COUNT(*) as count FROM observations WHERE vehicle_id = ? AND parking_position_id = ?'
+        )
+        .get(context.vehicleIds.abc123, context.positionIds.open3) as any;
+      expect(parseInt(observations.count)).toBe(1);
     });
 
     it('should allow different idempotency keys to create separate observations', async () => {
@@ -180,11 +179,12 @@ describe('Idempotency Integration Tests', () => {
       expect(result1.observationId).not.toBe(result2.observationId);
 
       // Verify both observations exist
-      const observations = await context.pool.query(
-        'SELECT id FROM observations WHERE vehicle_id = $1 AND parking_position_id = $2 ORDER BY created_at',
-        [context.vehicleIds.def456, context.positionIds.h1]
-      );
-      expect(observations.rows).toHaveLength(2);
+      const observations = context.db
+        .prepare(
+          'SELECT id FROM observations WHERE vehicle_id = ? AND parking_position_id = ? ORDER BY created_at'
+        )
+        .all(context.vehicleIds.def456, context.positionIds.h1) as any[];
+      expect(observations).toHaveLength(2);
     });
 
     it('should preserve idempotent response even after time passes', async () => {
@@ -362,11 +362,10 @@ describe('Idempotency Integration Tests', () => {
       expect(uniqueNoticeIds.size).toBe(1);
 
       // Verify only one notice was created
-      const notices = await context.pool.query(
-        'SELECT COUNT(*) as count FROM notices WHERE violation_id = $1',
-        [violationId]
-      );
-      expect(parseInt(notices.rows[0].count)).toBe(1);
+      const notices = context.db
+        .prepare('SELECT COUNT(*) as count FROM notices WHERE violation_id = ?')
+        .get(violationId) as any;
+      expect(parseInt(notices.count)).toBe(1);
     });
 
     it('should allow different idempotency keys to create separate notices', async () => {
@@ -516,7 +515,7 @@ describe('Idempotency Integration Tests', () => {
       const obsId1 = result1.observationId;
 
       // Simulate service restart by creating new service instance
-      const newObservationService = new ObservationService(context.pool);
+      const newObservationService = new ObservationService(context.db);
 
       // Second submission with same key through new service instance
       const result2 = await newObservationService.submit(

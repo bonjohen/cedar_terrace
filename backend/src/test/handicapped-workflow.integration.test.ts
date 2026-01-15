@@ -17,16 +17,16 @@ describe('Handicapped Workflow Integration Tests', () => {
   let parkingPositionService: ParkingPositionService;
   let handicappedService: HandicappedEnforcementService;
 
-  beforeAll(async () => {
-    context = await setupTestDatabase();
-    observationService = new ObservationService(context.pool);
-    violationService = new ViolationService(context.pool);
-    parkingPositionService = new ParkingPositionService(context.pool);
-    handicappedService = new HandicappedEnforcementService(context.pool, violationService);
+  beforeAll(() => {
+    context = setupTestDatabase();
+    observationService = new ObservationService(context.db);
+    violationService = new ViolationService(context.db);
+    parkingPositionService = new ParkingPositionService(context.db);
+    handicappedService = new HandicappedEnforcementService(context.db, violationService);
   });
 
-  afterAll(async () => {
-    await teardownTestDatabase();
+  afterAll(() => {
+    teardownTestDatabase(context);
   });
 
   describe('Progressive evidence evaluation', () => {
@@ -517,20 +517,18 @@ describe('Handicapped Workflow Integration Tests', () => {
       expect(originalObs!.id).toBe(obs1Id);
 
       // Verify evidence on original observation
-      const evidence1 = await context.pool.query(
-        'SELECT * FROM evidence_items WHERE observation_id = $1',
-        [obs1Id]
-      );
-      expect(evidence1.rows).toHaveLength(1);
-      expect(evidence1.rows[0].note_text).toBe('Original observation - no placard');
+      const evidence1 = context.db
+        .prepare('SELECT * FROM evidence_items WHERE observation_id = ?')
+        .all(obs1Id) as any[];
+      expect(evidence1).toHaveLength(1);
+      expect(evidence1[0].note_text).toBe('Original observation - no placard');
 
       // Verify evidence on second observation
-      const evidence2 = await context.pool.query(
-        'SELECT * FROM evidence_items WHERE observation_id = $1',
-        [obs2Id]
-      );
-      expect(evidence2.rows).toHaveLength(1);
-      expect(evidence2.rows[0].intent).toBe(EvidenceIntent.HANDICAPPED_PLACARD);
+      const evidence2 = context.db
+        .prepare('SELECT * FROM evidence_items WHERE observation_id = ?')
+        .all(obs2Id) as any[];
+      expect(evidence2).toHaveLength(1);
+      expect(evidence2[0].intent).toBe(EvidenceIntent.HANDICAPPED_PLACARD);
     });
 
     it('should track enforcement decisions through violation events', async () => {

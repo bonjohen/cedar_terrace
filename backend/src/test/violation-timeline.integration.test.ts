@@ -15,15 +15,15 @@ describe('Violation Timeline Integration Tests', () => {
   let observationService: ObservationService;
   let parkingPositionService: ParkingPositionService;
 
-  beforeAll(async () => {
-    context = await setupTestDatabase();
-    violationService = new ViolationService(context.pool);
-    observationService = new ObservationService(context.pool);
-    parkingPositionService = new ParkingPositionService(context.pool);
+  beforeAll(() => {
+    context = setupTestDatabase();
+    violationService = new ViolationService(context.db);
+    observationService = new ObservationService(context.db);
+    parkingPositionService = new ParkingPositionService(context.db);
   });
 
-  afterAll(async () => {
-    await teardownTestDatabase();
+  afterAll(() => {
+    teardownTestDatabase(context);
   });
 
   describe('Timeline event progression', () => {

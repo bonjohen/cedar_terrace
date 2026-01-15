@@ -15,15 +15,15 @@ describe('Observation Flow Integration Tests', () => {
   let violationService: ViolationService;
   let parkingPositionService: ParkingPositionService;
 
-  beforeAll(async () => {
-    context = await setupTestDatabase();
-    observationService = new ObservationService(context.pool);
-    violationService = new ViolationService(context.pool);
-    parkingPositionService = new ParkingPositionService(context.pool);
+  beforeAll(() => {
+    context = setupTestDatabase();
+    observationService = new ObservationService(context.db);
+    violationService = new ViolationService(context.db);
+    parkingPositionService = new ParkingPositionService(context.db);
   });
 
-  afterAll(async () => {
-    await teardownTestDatabase();
+  afterAll(() => {
+    teardownTestDatabase(context);
   });
 
   describe('Observation submission with violation derivation', () => {
@@ -255,11 +255,10 @@ describe('Observation Flow Integration Tests', () => {
       expect(observationId1).toBe(observationId2);
 
       // Verify that the observation has the original data
-      const checkResult = await context.pool.query(
-        'SELECT vehicle_id FROM observations WHERE id = $1',
-        [observationId1]
-      );
-      expect(checkResult.rows[0].vehicle_id).toBe(context.vehicleIds.abc123);
+      const checkResult = context.db
+        .prepare('SELECT vehicle_id FROM observations WHERE id = ?')
+        .get(observationId1) as any;
+      expect(checkResult.vehicle_id).toBe(context.vehicleIds.abc123);
     });
   });
 
@@ -303,20 +302,19 @@ describe('Observation Flow Integration Tests', () => {
       }
 
       // Verify evidence items were created
-      const evidenceResult = await context.pool.query(
-        'SELECT * FROM evidence_items WHERE observation_id = $1 ORDER BY created_at',
-        [observationId]
-      );
+      const evidenceResult = context.db
+        .prepare('SELECT * FROM evidence_items WHERE observation_id = ? ORDER BY created_at')
+        .all(observationId) as any[];
 
-      expect(evidenceResult.rows).toHaveLength(3);
-      expect(evidenceResult.rows[0].type).toBe('PHOTO');
-      expect(evidenceResult.rows[1].type).toBe('PHOTO');
-      expect(evidenceResult.rows[2].type).toBe('TEXT_NOTE');
-      expect(evidenceResult.rows[2].note_text).toBe('No visible placard observed');
+      expect(evidenceResult).toHaveLength(3);
+      expect(evidenceResult[0].type).toBe('PHOTO');
+      expect(evidenceResult[1].type).toBe('PHOTO');
+      expect(evidenceResult[2].type).toBe('TEXT_NOTE');
+      expect(evidenceResult[2].note_text).toBe('No visible placard observed');
     });
 
-    it('should enforce at least one evidence item requirement', async () => {
-      await expect(
+    it('should enforce at least one evidence item requirement', () => {
+      expect(() =>
         observationService.submit(
           {
             observedAt: new Date().toISOString(),
@@ -329,7 +327,7 @@ describe('Observation Flow Integration Tests', () => {
           },
           'test-user'
         )
-      ).rejects.toThrow('At least one evidence item is required');
+      ).toThrow('At least one evidence item is required');
     });
   });
 
@@ -404,11 +402,12 @@ describe('Observation Flow Integration Tests', () => {
       expect(h2Violations).toHaveLength(1);
 
       // Verify both observations exist for same vehicle and position
-      const obsResult = await context.pool.query(
-        'SELECT id FROM observations WHERE vehicle_id = $1 AND parking_position_id = $2 ORDER BY created_at',
-        [context.vehicleIds.def456, context.positionIds.h2]
-      );
-      expect(obsResult.rows.length).toBe(2);
+      const obsResult = context.db
+        .prepare(
+          'SELECT id FROM observations WHERE vehicle_id = ? AND parking_position_id = ? ORDER BY created_at'
+        )
+        .all(context.vehicleIds.def456, context.positionIds.h2) as any[];
+      expect(obsResult.length).toBe(2);
     });
   });
 });

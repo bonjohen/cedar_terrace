@@ -247,14 +247,14 @@ export class RecipientService {
       violation: {
         category: violation.category,
         status: violation.status,
-        detectedAt: violation.detectedAt.toISOString(),
+        detectedAt: typeof violation.detectedAt === 'string' ? violation.detectedAt : violation.detectedAt.toISOString(),
       },
       vehicle: {
         licensePlate: vehicle.license_plate,
         issuingState: vehicle.issuing_state,
       },
       notice: {
-        issuedAt: notice.issuedAt.toISOString(),
+        issuedAt: typeof notice.issuedAt === 'string' ? notice.issuedAt : notice.issuedAt.toISOString(),
         deadlines: payload.deadlines || {},
         instructions: payload.instructions || '',
       },

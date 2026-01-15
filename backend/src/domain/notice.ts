@@ -234,7 +234,7 @@ export class NoticeService {
     return {
       violationId: violation.id,
       category: violation.category,
-      detectedAt: violation.detectedAt.toISOString(),
+      detectedAt: typeof violation.detectedAt === 'string' ? violation.detectedAt : violation.detectedAt.toISOString(),
       vehicleLicensePlate: details.licensePlate,
       parkingPositionIdentifier: details.positionIdentifier,
       deadlines: {

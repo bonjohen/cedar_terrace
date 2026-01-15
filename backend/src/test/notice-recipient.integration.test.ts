@@ -3,6 +3,7 @@
  * Tests: QR token generation, recipient authentication, profile gating, ticket access
  */
 
+import { v4 as uuidv4 } from 'uuid';
 import { NoticeService } from '../domain/notice';
 import { RecipientService } from '../domain/recipient';
 import { ViolationService } from '../domain/violation';
@@ -21,23 +22,23 @@ describe('Notice Issuance and Recipient Access Integration Tests', () => {
   let parkingPositionService: ParkingPositionService;
   let storageService: StorageService;
 
-  beforeAll(async () => {
-    context = await setupTestDatabase();
-    observationService = new ObservationService(context.pool);
-    violationService = new ViolationService(context.pool);
-    parkingPositionService = new ParkingPositionService(context.pool);
-    noticeService = new NoticeService(context.pool, violationService);
+  beforeAll(() => {
+    context = setupTestDatabase();
+    observationService = new ObservationService(context.db);
+    violationService = new ViolationService(context.db);
+    parkingPositionService = new ParkingPositionService(context.db);
+    noticeService = new NoticeService(context.db, violationService);
     storageService = new StorageService();
     recipientService = new RecipientService(
-      context.pool,
+      context.db,
       noticeService,
       violationService,
       storageService
     );
   });
 
-  afterAll(async () => {
-    await teardownTestDatabase();
+  afterAll(() => {
+    teardownTestDatabase(context);
   });
 
   describe('Notice issuance', () => {
@@ -334,26 +335,25 @@ describe('Notice Issuance and Recipient Access Integration Tests', () => {
       expect(initiateResult.activationRequired).toBe(true);
 
       // Verify account created
-      const account = await context.pool.query(
-        'SELECT * FROM recipient_accounts WHERE id = $1',
-        [initiateResult.recipientAccountId]
-      );
-      expect(account.rows).toHaveLength(1);
-      expect(account.rows[0].email).toBe('recipient@example.com');
-      expect(account.rows[0].email_verified_at).toBeNull();
-      expect(account.rows[0].activation_token).toBeDefined();
+      const account = context.db
+        .prepare('SELECT * FROM recipient_accounts WHERE id = ?')
+        .get(initiateResult.recipientAccountId) as any;
+      expect(account).toBeDefined();
+      expect(account.email).toBe('recipient@example.com');
+      expect(account.email_verified_at).toBeNull();
+      expect(account.activation_token).toBeDefined();
     });
 
     it('should activate recipient account with valid activation token', async () => {
       // Create account
-      const accountResult = await context.pool.query(
-        `INSERT INTO recipient_accounts (email, activation_token, email_verified_at)
-         VALUES ($1, $2, $3)
-         RETURNING id, activation_token`,
-        ['test-activate@example.com', 'test-activation-token-123', null]
-      );
-      const accountId = accountResult.rows[0].id;
-      const activationToken = accountResult.rows[0].activation_token;
+      const accountId = uuidv4();
+      const activationToken = 'test-activation-token-123';
+      context.db
+        .prepare(
+          `INSERT INTO recipient_accounts (id, email, activation_token, email_verified_at)
+           VALUES (?, ?, ?, ?)`
+        )
+        .run(accountId, 'test-activate@example.com', activationToken, null);
 
       // Activate
       const activatedAccount = await recipientService.activateAccount(activationToken);
@@ -363,28 +363,27 @@ describe('Notice Issuance and Recipient Access Integration Tests', () => {
       expect(activatedAccount.profileCompletedAt).toBeNull();
 
       // Verify activation
-      const account = await context.pool.query(
-        'SELECT email_verified_at FROM recipient_accounts WHERE id = $1',
-        [accountId]
-      );
-      expect(account.rows[0].email_verified_at).not.toBeNull();
+      const account = context.db
+        .prepare('SELECT email_verified_at FROM recipient_accounts WHERE id = ?')
+        .get(accountId) as any;
+      expect(account.email_verified_at).not.toBeNull();
     });
 
-    it('should reject invalid activation token', async () => {
-      await expect(recipientService.activateAccount('invalid-token-xyz')).rejects.toThrow();
+    it('should reject invalid activation token', () => {
+      expect(() => recipientService.activateAccount('invalid-token-xyz')).toThrow();
     });
   });
 
   describe('Profile completion gating', () => {
     it('should require profile completion before ticket access', async () => {
       // Create activated account without profile
-      const accountResult = await context.pool.query(
-        `INSERT INTO recipient_accounts (email, email_verified_at, first_name, last_name)
-         VALUES ($1, CURRENT_TIMESTAMP, $2, $3)
-         RETURNING id`,
-        ['incomplete-profile@example.com', null, null]
-      );
-      const accountId = accountResult.rows[0].id;
+      const accountId = uuidv4();
+      context.db
+        .prepare(
+          `INSERT INTO recipient_accounts (id, email, email_verified_at, first_name, last_name)
+           VALUES (?, ?, datetime('now'), ?, ?)`
+        )
+        .run(accountId, 'incomplete-profile@example.com', null, null);
 
       // Attempt to get ticket details should fail
       await expect(
@@ -394,13 +393,13 @@ describe('Notice Issuance and Recipient Access Integration Tests', () => {
 
     it('should allow profile completion', async () => {
       // Create activated account
-      const accountResult = await context.pool.query(
-        `INSERT INTO recipient_accounts (email, email_verified_at)
-         VALUES ($1, CURRENT_TIMESTAMP)
-         RETURNING id`,
-        ['complete-profile@example.com']
-      );
-      const accountId = accountResult.rows[0].id;
+      const accountId = uuidv4();
+      context.db
+        .prepare(
+          `INSERT INTO recipient_accounts (id, email, email_verified_at)
+           VALUES (?, ?, datetime('now'))`
+        )
+        .run(accountId, 'complete-profile@example.com');
 
       // Complete profile
       const completedAccount = await recipientService.completeProfile(accountId, {
@@ -415,14 +414,15 @@ describe('Notice Issuance and Recipient Access Integration Tests', () => {
       expect(completedAccount.profileCompletedAt).toBeDefined();
 
       // Verify profile in database
-      const account = await context.pool.query(
-        'SELECT first_name, last_name, phone_number, profile_completed_at FROM recipient_accounts WHERE id = $1',
-        [accountId]
-      );
-      expect(account.rows[0].first_name).toBe('John');
-      expect(account.rows[0].last_name).toBe('Doe');
-      expect(account.rows[0].phone_number).toBe('555-123-4567');
-      expect(account.rows[0].profile_completed_at).not.toBeNull();
+      const account = context.db
+        .prepare(
+          'SELECT first_name, last_name, phone_number, profile_completed_at FROM recipient_accounts WHERE id = ?'
+        )
+        .get(accountId) as any;
+      expect(account.first_name).toBe('John');
+      expect(account.last_name).toBe('Doe');
+      expect(account.phone_number).toBe('555-123-4567');
+      expect(account.profile_completed_at).not.toBeNull();
     });
   });
 
@@ -476,15 +476,15 @@ describe('Notice Issuance and Recipient Access Integration Tests', () => {
       const notice = await noticeService.getById(issueResponse.noticeId);
 
       // Create complete recipient account
-      const accountResult = await context.pool.query(
-        `INSERT INTO recipient_accounts (
-          email, email_verified_at, first_name, last_name, phone_number, profile_completed_at
-         )
-         VALUES ($1, CURRENT_TIMESTAMP, $2, $3, $4, CURRENT_TIMESTAMP)
-         RETURNING id`,
-        ['ticket-viewer@example.com', 'Jane', 'Smith', '555-987-6543']
-      );
-      const accountId = accountResult.rows[0].id;
+      const accountId = uuidv4();
+      context.db
+        .prepare(
+          `INSERT INTO recipient_accounts (
+            id, email, email_verified_at, first_name, last_name, phone_number, profile_completed_at
+           )
+           VALUES (?, ?, datetime('now'), ?, ?, ?, datetime('now'))`
+        )
+        .run(accountId, 'ticket-viewer@example.com', 'Jane', 'Smith', '555-987-6543');
 
       // Get ticket details
       const ticket = await recipientService.getTicketDetails(accountId, notice!.qrToken);
@@ -503,22 +503,21 @@ describe('Notice Issuance and Recipient Access Integration Tests', () => {
       expect(ticket.evidenceUrls).toBeDefined();
 
       // Verify access was logged
-      const accessLog = await context.pool.query(
-        'SELECT * FROM recipient_access_logs WHERE recipient_account_id = $1',
-        [accountId]
-      );
-      expect(accessLog.rows.length).toBeGreaterThan(0);
+      const accessLog = context.db
+        .prepare('SELECT * FROM recipient_access_logs WHERE recipient_account_id = ?')
+        .all(accountId) as any[];
+      expect(accessLog.length).toBeGreaterThan(0);
     });
 
     it('should prevent access without email verification', async () => {
       // Create unverified account
-      const accountResult = await context.pool.query(
-        `INSERT INTO recipient_accounts (email, email_verified_at, first_name, last_name, profile_completed_at)
-         VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
-         RETURNING id`,
-        ['unverified@example.com', null, 'Test', 'User']
-      );
-      const accountId = accountResult.rows[0].id;
+      const accountId = uuidv4();
+      context.db
+        .prepare(
+          `INSERT INTO recipient_accounts (id, email, email_verified_at, first_name, last_name, profile_completed_at)
+           VALUES (?, ?, ?, ?, ?, datetime('now'))`
+        )
+        .run(accountId, 'unverified@example.com', null, 'Test', 'User');
 
       // Attempt to access ticket
       await expect(
@@ -528,13 +527,13 @@ describe('Notice Issuance and Recipient Access Integration Tests', () => {
 
     it('should prevent access without profile completion', async () => {
       // Create verified account without profile
-      const accountResult = await context.pool.query(
-        `INSERT INTO recipient_accounts (email, email_verified_at, profile_completed_at)
-         VALUES ($1, CURRENT_TIMESTAMP, $2)
-         RETURNING id`,
-        ['verified-no-profile@example.com', null]
-      );
-      const accountId = accountResult.rows[0].id;
+      const accountId = uuidv4();
+      context.db
+        .prepare(
+          `INSERT INTO recipient_accounts (id, email, email_verified_at, profile_completed_at)
+           VALUES (?, ?, datetime('now'), ?)`
+        )
+        .run(accountId, 'verified-no-profile@example.com', null);
 
       // Attempt to access ticket
       await expect(
@@ -546,15 +545,15 @@ describe('Notice Issuance and Recipient Access Integration Tests', () => {
   describe('Access logging', () => {
     it('should log all recipient access attempts', async () => {
       // Create complete recipient account
-      const accountResult = await context.pool.query(
-        `INSERT INTO recipient_accounts (
-          email, email_verified_at, first_name, last_name, profile_completed_at
-         )
-         VALUES ($1, CURRENT_TIMESTAMP, $2, $3, CURRENT_TIMESTAMP)
-         RETURNING id`,
-        ['logging-test@example.com', 'Test', 'User']
-      );
-      const accountId = accountResult.rows[0].id;
+      const accountId = uuidv4();
+      context.db
+        .prepare(
+          `INSERT INTO recipient_accounts (
+            id, email, email_verified_at, first_name, last_name, profile_completed_at
+           )
+           VALUES (?, ?, datetime('now'), ?, ?, datetime('now'))`
+        )
+        .run(accountId, 'logging-test@example.com', 'Test', 'User');
 
       // Create observation, violation, and notice
       const result = await observationService.submit(
@@ -595,10 +594,9 @@ describe('Notice Issuance and Recipient Access Integration Tests', () => {
       const notice = await noticeService.getById(issueResponse.noticeId);
 
       // Clear any existing logs for this account
-      await context.pool.query(
-        'DELETE FROM recipient_access_logs WHERE recipient_account_id = $1',
-        [accountId]
-      );
+      context.db
+        .prepare('DELETE FROM recipient_access_logs WHERE recipient_account_id = ?')
+        .run(accountId);
 
       // Access ticket twice
       await recipientService.getTicketDetails(
@@ -615,13 +613,14 @@ describe('Notice Issuance and Recipient Access Integration Tests', () => {
       );
 
       // Verify logs
-      const logs = await context.pool.query(
-        'SELECT * FROM recipient_access_logs WHERE recipient_account_id = $1 ORDER BY accessed_at',
-        [accountId]
-      );
-      expect(logs.rows.length).toBe(2);
-      expect(logs.rows[0].notice_id).toBe(notice!.id);
-      expect(logs.rows[1].notice_id).toBe(notice!.id);
+      const logs = context.db
+        .prepare(
+          'SELECT * FROM recipient_access_logs WHERE recipient_account_id = ? ORDER BY accessed_at'
+        )
+        .all(accountId) as any[];
+      expect(logs.length).toBe(2);
+      expect(logs[0].notice_id).toBe(notice!.id);
+      expect(logs[1].notice_id).toBe(notice!.id);
     });
   });
 });
