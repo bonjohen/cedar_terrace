@@ -1,37 +1,37 @@
 import { Router, Request, Response } from 'express';
-import { Pool } from 'pg';
+import Database from 'better-sqlite3';
 import { ObservationService, ViolationService, ParkingPositionService } from '../domain';
 import { HandicappedEnforcementService } from '../domain/handicapped';
 import { SubmitObservationRequest, EvidenceIntent } from '@cedar-terrace/shared';
 
-export function createObservationRoutes(pool: Pool): Router {
+export function createObservationRoutes(db: Database.Database): Router {
   const router = Router();
-  const observationService = new ObservationService(pool);
-  const violationService = new ViolationService(pool);
-  const positionService = new ParkingPositionService(pool);
-  const handicappedService = new HandicappedEnforcementService(pool, violationService);
+  const observationService = new ObservationService(db);
+  const violationService = new ViolationService(db);
+  const positionService = new ParkingPositionService(db);
+  const handicappedService = new HandicappedEnforcementService(db, violationService);
 
   // Submit observation (idempotent)
-  router.post('/submit', async (req: Request, res: Response) => {
+  router.post('/submit', (req: Request, res: Response) => {
     try {
       const request = req.body as SubmitObservationRequest;
       const submittedBy = req.headers['x-user-id'] as string || 'ADMIN';
 
       // Submit observation
-      const result = await observationService.submit(request, submittedBy);
+      const result = observationService.submit(request, submittedBy);
 
       // If this is a new observation, derive violations
       if (result.created && result.observationId) {
-        const observation = await observationService.getById(result.observationId);
+        const observation = observationService.getById(result.observationId);
         if (observation) {
           // Get parking position if referenced
           let position = null;
           if (observation.parkingPositionId) {
-            position = await positionService.getById(observation.parkingPositionId);
+            position = positionService.getById(observation.parkingPositionId);
           }
 
           // Derive violations
-          const violationIds = await violationService.deriveFromObservation(
+          const violationIds = violationService.deriveFromObservation(
             observation,
             position,
             submittedBy
@@ -40,13 +40,13 @@ export function createObservationRoutes(pool: Pool): Router {
           result.violationIds = violationIds;
 
           // Check for handicapped placard evidence and re-evaluate
-          const evidence = await observationService.getEvidence(observation.id);
+          const evidence = observationService.getEvidence(observation.id);
           const hasPlacardEvidence = evidence.some(
             (e) => e.intent === EvidenceIntent.HANDICAPPED_PLACARD
           );
 
           if (hasPlacardEvidence && observation.vehicleId) {
-            await handicappedService.evaluateHandicappedCompliance(
+            handicappedService.evaluateHandicappedCompliance(
               observation.vehicleId,
               observation.id
             );
@@ -61,9 +61,9 @@ export function createObservationRoutes(pool: Pool): Router {
   });
 
   // Get observation by ID
-  router.get('/:id', async (req: Request, res: Response) => {
+  router.get('/:id', (req: Request, res: Response) => {
     try {
-      const observation = await observationService.getById(req.params.id);
+      const observation = observationService.getById(req.params.id);
       if (!observation) {
         res.status(404).json({ error: 'Observation not found' });
         return;
@@ -75,9 +75,9 @@ export function createObservationRoutes(pool: Pool): Router {
   });
 
   // Get evidence for observation
-  router.get('/:id/evidence', async (req: Request, res: Response) => {
+  router.get('/:id/evidence', (req: Request, res: Response) => {
     try {
-      const evidence = await observationService.getEvidence(req.params.id);
+      const evidence = observationService.getEvidence(req.params.id);
       res.json(evidence);
     } catch (error) {
       res.status(400).json({ error: String(error) });
@@ -85,10 +85,10 @@ export function createObservationRoutes(pool: Pool): Router {
   });
 
   // Get observations for vehicle
-  router.get('/vehicle/:vehicleId', async (req: Request, res: Response) => {
+  router.get('/vehicle/:vehicleId', (req: Request, res: Response) => {
     try {
       const limit = parseInt(req.query.limit as string) || 50;
-      const observations = await observationService.getByVehicle(req.params.vehicleId, limit);
+      const observations = observationService.getByVehicle(req.params.vehicleId, limit);
       res.json(observations);
     } catch (error) {
       res.status(400).json({ error: String(error) });
@@ -96,10 +96,10 @@ export function createObservationRoutes(pool: Pool): Router {
   });
 
   // Get observations for parking position
-  router.get('/position/:positionId', async (req: Request, res: Response) => {
+  router.get('/position/:positionId', (req: Request, res: Response) => {
     try {
       const limit = parseInt(req.query.limit as string) || 50;
-      const observations = await observationService.getByPosition(req.params.positionId, limit);
+      const observations = observationService.getByPosition(req.params.positionId, limit);
       res.json(observations);
     } catch (error) {
       res.status(400).json({ error: String(error) });

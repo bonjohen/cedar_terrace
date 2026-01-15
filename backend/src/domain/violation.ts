@@ -1,4 +1,5 @@
-import { Pool } from 'pg';
+import Database from 'better-sqlite3';
+import { v4 as uuidv4 } from 'uuid';
 import {
   Violation,
   ViolationEvent,
@@ -50,27 +51,23 @@ const TIMELINE_RULES: TimelineRule[] = [
 ];
 
 export class ViolationService {
-  constructor(private pool: Pool) {}
+  constructor(private db: Database.Database) {}
 
   /**
    * Derive violations from a new observation
    * This is called after an observation is submitted
    */
-  async deriveFromObservation(
+  deriveFromObservation(
     observation: Observation,
     position: ParkingPosition | null,
     performedBy: string
-  ): Promise<string[]> {
-    const client = await this.pool.connect();
-    const violationIds: string[] = [];
-
-    try {
-      await client.query('BEGIN');
+  ): string[] {
+    const transaction = this.db.transaction(() => {
+      const violationIds: string[] = [];
 
       // Check for unauthorized stall usage
       if (position) {
-        const unauthorizedViolation = await this.checkUnauthorizedStall(
-          client,
+        const unauthorizedViolation = this.checkUnauthorizedStall(
           observation,
           position,
           performedBy
@@ -80,8 +77,7 @@ export class ViolationService {
         }
 
         // Check for handicapped violations
-        const handicappedViolation = await this.checkHandicappedViolation(
-          client,
+        const handicappedViolation = this.checkHandicappedViolation(
           observation,
           position,
           performedBy
@@ -92,8 +88,7 @@ export class ViolationService {
       }
 
       // Check for expired registration
-      const expiredRegViolation = await this.checkExpiredRegistration(
-        client,
+      const expiredRegViolation = this.checkExpiredRegistration(
         observation,
         position,
         performedBy
@@ -102,20 +97,16 @@ export class ViolationService {
         violationIds.push(expiredRegViolation);
       }
 
-      await client.query('COMMIT');
       return violationIds;
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
-    }
+    });
+
+    return transaction();
   }
 
   /**
    * Add an event to a violation timeline
    */
-  async addEvent(
+  addEvent(
     violationId: string,
     eventType: ViolationEventType,
     options: {
@@ -124,86 +115,93 @@ export class ViolationService {
       notes?: string;
       performedBy?: string;
     }
-  ): Promise<ViolationEvent> {
-    const client = await this.pool.connect();
-
-    try {
-      await client.query('BEGIN');
-
+  ): ViolationEvent {
+    const transaction = this.db.transaction(() => {
       // Insert event
-      const eventResult = await client.query<ViolationEvent>(
+      const eventId = uuidv4();
+      const now = new Date().toISOString();
+
+      const eventStmt = this.db.prepare(
         `INSERT INTO violation_events (
-          violation_id, event_type, observation_id, notice_id, notes, performed_by
-        ) VALUES ($1, $2, $3, $4, $5, $6)
-        RETURNING *`,
-        [
-          violationId,
-          eventType,
-          options.observationId || null,
-          options.noticeId || null,
-          options.notes || null,
-          options.performedBy || 'SYSTEM',
-        ]
+          id, violation_id, event_type, observation_id, notice_id, notes, performed_by, event_at, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      );
+
+      eventStmt.run(
+        eventId,
+        violationId,
+        eventType,
+        options.observationId || null,
+        options.noticeId || null,
+        options.notes || null,
+        options.performedBy || 'SYSTEM',
+        now,
+        now,
+        now
       );
 
       // Update violation status based on event type
       const newStatus = this.eventTypeToStatus(eventType);
       if (newStatus) {
-        await client.query(
-          'UPDATE violations SET status = $1 WHERE id = $2',
-          [newStatus, violationId]
+        const updateStatusStmt = this.db.prepare(
+          'UPDATE violations SET status = ? WHERE id = ?'
         );
+        updateStatusStmt.run(newStatus, violationId);
       }
 
       // Handle resolved/dismissed events
       if (eventType === ViolationEventType.RESOLVED) {
-        await client.query(
-          'UPDATE violations SET resolved_at = CURRENT_TIMESTAMP WHERE id = $1',
-          [violationId]
+        const resolveStmt = this.db.prepare(
+          'UPDATE violations SET resolved_at = datetime(\'now\') WHERE id = ?'
         );
+        resolveStmt.run(violationId);
       } else if (eventType === ViolationEventType.DISMISSED) {
-        await client.query(
-          'UPDATE violations SET dismissed_at = CURRENT_TIMESTAMP, dismissal_reason = $1 WHERE id = $2',
-          [options.notes || 'Dismissed', violationId]
+        const dismissStmt = this.db.prepare(
+          'UPDATE violations SET dismissed_at = datetime(\'now\'), dismissal_reason = ? WHERE id = ?'
         );
+        dismissStmt.run(options.notes || 'Dismissed', violationId);
       }
 
-      await client.query('COMMIT');
-      return this.mapEventRow(eventResult.rows[0]);
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
-    }
+      // Retrieve and return the created event
+      const getEventStmt = this.db.prepare(
+        'SELECT * FROM violation_events WHERE id = ?'
+      );
+      const event = getEventStmt.get(eventId) as any;
+
+      return this.mapEventRow(event);
+    });
+
+    return transaction();
   }
 
   /**
    * Evaluate timeline transitions for all active violations
    * Called periodically by scheduled worker
    */
-  async evaluateTimelines(): Promise<number> {
-    const activeViolations = await this.pool.query<Violation>(
+  evaluateTimelines(): number {
+    const stmt = this.db.prepare(
       `SELECT * FROM violations
        WHERE status NOT IN ('RESOLVED', 'DISMISSED')
          AND deleted_at IS NULL`
     );
+    const activeViolations = stmt.all();
 
     let transitionCount = 0;
 
-    for (const violation of activeViolations.rows) {
+    for (const violationRow of activeViolations) {
+      const violation = this.mapViolationRow(violationRow as any);
       const rule = TIMELINE_RULES.find((r) => r.category === violation.category);
       if (!rule) continue;
 
       const hoursSinceDetection =
-        (Date.now() - new Date((violation as any).detected_at).getTime()) / (1000 * 60 * 60);
+        (Date.now() - new Date(violation.detectedAt).getTime()) / (1000 * 60 * 60);
 
       // Check for state transitions
       if (
         violation.status === ViolationStatus.DETECTED &&
         hoursSinceDetection >= rule.noticeEligibleAfterHours
       ) {
-        await this.addEvent(violation.id, ViolationEventType.NOTICE_ELIGIBLE, {
+        this.addEvent(violation.id, ViolationEventType.NOTICE_ELIGIBLE, {
           notes: 'Auto-transitioned by timeline evaluation',
         });
         transitionCount++;
@@ -211,7 +209,7 @@ export class ViolationService {
         violation.status === ViolationStatus.NOTICE_ISSUED &&
         hoursSinceDetection >= rule.escalationAfterHours
       ) {
-        await this.addEvent(violation.id, ViolationEventType.ESCALATED, {
+        this.addEvent(violation.id, ViolationEventType.ESCALATED, {
           notes: 'Auto-escalated by timeline evaluation',
         });
         transitionCount++;
@@ -219,7 +217,7 @@ export class ViolationService {
         violation.status === ViolationStatus.ESCALATED &&
         hoursSinceDetection >= rule.towEligibleAfterHours
       ) {
-        await this.addEvent(violation.id, ViolationEventType.TOW_ELIGIBLE, {
+        this.addEvent(violation.id, ViolationEventType.TOW_ELIGIBLE, {
           notes: 'Auto-transitioned to tow eligible',
         });
         transitionCount++;
@@ -229,46 +227,45 @@ export class ViolationService {
     return transitionCount;
   }
 
-  async getById(id: string): Promise<Violation | null> {
-    const result = await this.pool.query<Violation>(
-      'SELECT * FROM violations WHERE id = $1 AND deleted_at IS NULL',
-      [id]
+  getById(id: string): Violation | null {
+    const stmt = this.db.prepare(
+      'SELECT * FROM violations WHERE id = ? AND deleted_at IS NULL'
     );
+    const row = stmt.get(id) as any;
 
-    return result.rows.length > 0 ? this.mapViolationRow(result.rows[0]) : null;
+    return row ? this.mapViolationRow(row) : null;
   }
 
-  async getEvents(violationId: string): Promise<ViolationEvent[]> {
-    const result = await this.pool.query<ViolationEvent>(
+  getEvents(violationId: string): ViolationEvent[] {
+    const stmt = this.db.prepare(
       `SELECT * FROM violation_events
-       WHERE violation_id = $1 AND deleted_at IS NULL
-       ORDER BY event_at ASC`,
-      [violationId]
+       WHERE violation_id = ? AND deleted_at IS NULL
+       ORDER BY event_at ASC`
     );
+    const rows = stmt.all(violationId);
 
-    return result.rows.map(this.mapEventRow);
+    return rows.map((row) => this.mapEventRow(row as any));
   }
 
-  async getByVehicle(vehicleId: string): Promise<Violation[]> {
-    const result = await this.pool.query<Violation>(
+  getByVehicle(vehicleId: string): Violation[] {
+    const stmt = this.db.prepare(
       `SELECT * FROM violations
-       WHERE vehicle_id = $1 AND deleted_at IS NULL
-       ORDER BY detected_at DESC`,
-      [vehicleId]
+       WHERE vehicle_id = ? AND deleted_at IS NULL
+       ORDER BY detected_at DESC`
     );
+    const rows = stmt.all(vehicleId);
 
-    return result.rows.map(this.mapViolationRow);
+    return rows.map((row) => this.mapViolationRow(row as any));
   }
 
   /**
    * Check for unauthorized stall usage
    */
-  private async checkUnauthorizedStall(
-    client: any,
+  private checkUnauthorizedStall(
     observation: Observation,
     position: ParkingPosition,
     performedBy: string
-  ): Promise<string | null> {
+  ): string | null {
     // Only applies to PURCHASED/RESERVED positions
     if (
       position.type !== 'PURCHASED' &&
@@ -283,60 +280,81 @@ export class ViolationService {
     }
 
     // Check for existing active violation
-    const existing = await client.query(
+    const existingStmt = this.db.prepare(
       `SELECT id FROM violations
-       WHERE parking_position_id = $1
-         AND vehicle_id = $2
-         AND category = $3
+       WHERE parking_position_id = ?
+         AND vehicle_id = ?
+         AND category = ?
          AND status NOT IN ('RESOLVED', 'DISMISSED')
-         AND deleted_at IS NULL`,
-      [position.id, observation.vehicleId, ViolationCategory.UNAUTHORIZED_STALL]
+         AND deleted_at IS NULL`
     );
+    const existing = existingStmt.get(
+      position.id,
+      observation.vehicleId,
+      ViolationCategory.UNAUTHORIZED_STALL
+    ) as any;
 
-    if (existing.rows.length > 0) {
+    if (existing) {
       // Add observation to existing violation
-      await this.addEvent(existing.rows[0].id, ViolationEventType.OBSERVATION_ADDED, {
+      this.addEvent(existing.id, ViolationEventType.OBSERVATION_ADDED, {
         observationId: observation.id,
         performedBy,
       });
-      return existing.rows[0].id;
+      return existing.id;
     }
 
     // Create new violation
-    const violation = await client.query(
+    const violationId = uuidv4();
+    const now = new Date().toISOString();
+
+    const violationStmt = this.db.prepare(
       `INSERT INTO violations (
-        site_id, vehicle_id, parking_position_id, category, detected_at
-      ) VALUES ($1, $2, $3, $4, $5)
-      RETURNING *`,
-      [
-        observation.siteId,
-        observation.vehicleId,
-        position.id,
-        ViolationCategory.UNAUTHORIZED_STALL,
-        observation.observedAt,
-      ]
+        id, site_id, vehicle_id, parking_position_id, category, status, detected_at, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    );
+
+    violationStmt.run(
+      violationId,
+      observation.siteId,
+      observation.vehicleId,
+      position.id,
+      ViolationCategory.UNAUTHORIZED_STALL,
+      ViolationStatus.DETECTED,
+      observation.observedAt,
+      now,
+      now
     );
 
     // Create initial event
-    await client.query(
+    const eventId = uuidv4();
+    const eventStmt = this.db.prepare(
       `INSERT INTO violation_events (
-        violation_id, event_type, observation_id, performed_by
-      ) VALUES ($1, $2, $3, $4)`,
-      [violation.rows[0].id, ViolationEventType.DETECTED, observation.id, performedBy]
+        id, violation_id, event_type, observation_id, performed_by, event_at, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     );
 
-    return violation.rows[0].id;
+    eventStmt.run(
+      eventId,
+      violationId,
+      ViolationEventType.DETECTED,
+      observation.id,
+      performedBy,
+      now,
+      now,
+      now
+    );
+
+    return violationId;
   }
 
   /**
    * Check for handicapped violations (preliminary - may be resolved with later evidence)
    */
-  private async checkHandicappedViolation(
-    client: any,
+  private checkHandicappedViolation(
     observation: Observation,
     position: ParkingPosition,
     performedBy: string
-  ): Promise<string | null> {
+  ): string | null {
     if (position.type !== 'HANDICAPPED') {
       return null;
     }
@@ -345,58 +363,79 @@ export class ViolationService {
     // For now, we'll create a violation that can be resolved later
     // when placard evidence is added
 
-    const existing = await client.query(
+    const existingStmt = this.db.prepare(
       `SELECT id FROM violations
-       WHERE parking_position_id = $1
-         AND vehicle_id = $2
-         AND category = $3
+       WHERE parking_position_id = ?
+         AND vehicle_id = ?
+         AND category = ?
          AND status NOT IN ('RESOLVED', 'DISMISSED')
-         AND deleted_at IS NULL`,
-      [position.id, observation.vehicleId, ViolationCategory.HANDICAPPED_NO_PLACARD]
+         AND deleted_at IS NULL`
     );
+    const existing = existingStmt.get(
+      position.id,
+      observation.vehicleId,
+      ViolationCategory.HANDICAPPED_NO_PLACARD
+    ) as any;
 
-    if (existing.rows.length > 0) {
-      await this.addEvent(existing.rows[0].id, ViolationEventType.OBSERVATION_ADDED, {
+    if (existing) {
+      this.addEvent(existing.id, ViolationEventType.OBSERVATION_ADDED, {
         observationId: observation.id,
         performedBy,
       });
-      return existing.rows[0].id;
+      return existing.id;
     }
 
     // Create violation (may be resolved when placard evidence is found)
-    const violation = await client.query(
+    const violationId = uuidv4();
+    const now = new Date().toISOString();
+
+    const violationStmt = this.db.prepare(
       `INSERT INTO violations (
-        site_id, vehicle_id, parking_position_id, category, detected_at
-      ) VALUES ($1, $2, $3, $4, $5)
-      RETURNING *`,
-      [
-        observation.siteId,
-        observation.vehicleId,
-        position.id,
-        ViolationCategory.HANDICAPPED_NO_PLACARD,
-        observation.observedAt,
-      ]
+        id, site_id, vehicle_id, parking_position_id, category, status, detected_at, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
     );
 
-    await client.query(
+    violationStmt.run(
+      violationId,
+      observation.siteId,
+      observation.vehicleId,
+      position.id,
+      ViolationCategory.HANDICAPPED_NO_PLACARD,
+      ViolationStatus.DETECTED,
+      observation.observedAt,
+      now,
+      now
+    );
+
+    const eventId = uuidv4();
+    const eventStmt = this.db.prepare(
       `INSERT INTO violation_events (
-        violation_id, event_type, observation_id, performed_by
-      ) VALUES ($1, $2, $3, $4)`,
-      [violation.rows[0].id, ViolationEventType.DETECTED, observation.id, performedBy]
+        id, violation_id, event_type, observation_id, performed_by, event_at, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     );
 
-    return violation.rows[0].id;
+    eventStmt.run(
+      eventId,
+      violationId,
+      ViolationEventType.DETECTED,
+      observation.id,
+      performedBy,
+      now,
+      now,
+      now
+    );
+
+    return violationId;
   }
 
   /**
    * Check for expired registration
    */
-  private async checkExpiredRegistration(
-    client: any,
+  private checkExpiredRegistration(
     observation: Observation,
     position: ParkingPosition | null,
     performedBy: string
-  ): Promise<string | null> {
+  ): string | null {
     if (!observation.registrationYear || !observation.registrationMonth) {
       return null; // Cannot determine expiration
     }
@@ -413,45 +452,66 @@ export class ViolationService {
     }
 
     // Check for existing violation
-    const existing = await client.query(
+    const existingStmt = this.db.prepare(
       `SELECT id FROM violations
-       WHERE vehicle_id = $1
-         AND category = $2
+       WHERE vehicle_id = ?
+         AND category = ?
          AND status NOT IN ('RESOLVED', 'DISMISSED')
-         AND deleted_at IS NULL`,
-      [observation.vehicleId, ViolationCategory.EXPIRED_REGISTRATION]
+         AND deleted_at IS NULL`
     );
+    const existing = existingStmt.get(
+      observation.vehicleId,
+      ViolationCategory.EXPIRED_REGISTRATION
+    ) as any;
 
-    if (existing.rows.length > 0) {
-      await this.addEvent(existing.rows[0].id, ViolationEventType.OBSERVATION_ADDED, {
+    if (existing) {
+      this.addEvent(existing.id, ViolationEventType.OBSERVATION_ADDED, {
         observationId: observation.id,
         performedBy,
       });
-      return existing.rows[0].id;
+      return existing.id;
     }
 
-    const violation = await client.query(
+    const violationId = uuidv4();
+    const nowStr = new Date().toISOString();
+
+    const violationStmt = this.db.prepare(
       `INSERT INTO violations (
-        site_id, vehicle_id, parking_position_id, category, detected_at
-      ) VALUES ($1, $2, $3, $4, $5)
-      RETURNING *`,
-      [
-        observation.siteId,
-        observation.vehicleId,
-        position?.id || null,
-        ViolationCategory.EXPIRED_REGISTRATION,
-        observation.observedAt,
-      ]
+        id, site_id, vehicle_id, parking_position_id, category, status, detected_at, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
     );
 
-    await client.query(
+    violationStmt.run(
+      violationId,
+      observation.siteId,
+      observation.vehicleId,
+      position?.id || null,
+      ViolationCategory.EXPIRED_REGISTRATION,
+      ViolationStatus.DETECTED,
+      observation.observedAt,
+      nowStr,
+      nowStr
+    );
+
+    const eventId = uuidv4();
+    const eventStmt = this.db.prepare(
       `INSERT INTO violation_events (
-        violation_id, event_type, observation_id, performed_by
-      ) VALUES ($1, $2, $3, $4)`,
-      [violation.rows[0].id, ViolationEventType.DETECTED, observation.id, performedBy]
+        id, violation_id, event_type, observation_id, performed_by, event_at, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     );
 
-    return violation.rows[0].id;
+    eventStmt.run(
+      eventId,
+      violationId,
+      ViolationEventType.DETECTED,
+      observation.id,
+      performedBy,
+      nowStr,
+      nowStr,
+      nowStr
+    );
+
+    return violationId;
   }
 
   private eventTypeToStatus(eventType: ViolationEventType): ViolationStatus | null {

@@ -1,20 +1,43 @@
-import { Pool } from 'pg';
+import Database from 'better-sqlite3';
+import { readFileSync } from 'fs';
+import { join } from 'path';
 import { ParkingPositionService } from './parking-position';
 import { ParkingPositionType } from '@cedar-terrace/shared';
 
 describe('ParkingPositionService', () => {
-  let mockPool: jest.Mocked<Pool>;
+  let db: Database.Database;
   let service: ParkingPositionService;
 
   beforeEach(() => {
-    mockPool = {
-      query: jest.fn(),
-    } as any;
-    service = new ParkingPositionService(mockPool);
+    // Create in-memory database
+    db = new Database(':memory:');
+
+    // Run migration to create schema
+    const migrationSql = readFileSync(
+      join(__dirname, '../db/migrations/001_initial_schema.sql'),
+      'utf-8'
+    );
+    db.exec(migrationSql);
+
+    // Initialize service
+    service = new ParkingPositionService(db);
+  });
+
+  afterEach(() => {
+    db.close();
   });
 
   describe('create', () => {
-    it('should create a new parking position', async () => {
+    it('should create a new parking position', () => {
+      // Create test site and lot image first
+      db.prepare(
+        'INSERT INTO sites (id, name, address) VALUES (?, ?, ?)'
+      ).run('site-1', 'Test Site', '123 Test St');
+
+      db.prepare(
+        'INSERT INTO lot_images (id, site_id, s3_key, width, height) VALUES (?, ?, ?, ?, ?)'
+      ).run('lot-1', 'site-1', 'test.jpg', 1000, 1000);
+
       const request = {
         siteId: 'site-1',
         lotImageId: 'lot-1',
@@ -24,31 +47,19 @@ describe('ParkingPositionService', () => {
         radius: 50,
       };
 
-      const mockResult = {
-        id: 'pos-1',
-        site_id: 'site-1',
-        lot_image_id: 'lot-1',
-        type: 'OPEN',
-        center_x: '100',
-        center_y: '200',
-        radius: '50',
-        identifier: null,
-        rental_info: null,
-        assigned_vehicle_id: null,
-        created_at: new Date(),
-        updated_at: new Date(),
-        deleted_at: null,
-      };
+      const result = service.create(request);
 
-      mockPool.query.mockResolvedValue({ rows: [mockResult] } as any);
-
-      const result = await service.create(request);
-
-      expect(result.id).toBe('pos-1');
+      expect(result.id).toBeDefined();
       expect(result.type).toBe(ParkingPositionType.OPEN);
       expect(result.centerX).toBe(100);
       expect(result.centerY).toBe(200);
       expect(result.radius).toBe(50);
+      expect(result.siteId).toBe('site-1');
+      expect(result.lotImageId).toBe('lot-1');
+
+      // Verify in database
+      const dbRow = db.prepare('SELECT * FROM parking_positions WHERE id = ?').get(result.id);
+      expect(dbRow).toBeDefined();
     });
   });
 
@@ -83,56 +94,77 @@ describe('ParkingPositionService', () => {
   });
 
   describe('findPositionAtPoint', () => {
-    it('should find position containing the point', async () => {
-      const mockResult = {
-        id: 'pos-1',
-        lot_image_id: 'lot-1',
-        center_x: '100',
-        center_y: '100',
-        radius: '50',
-        type: 'OPEN',
-        site_id: 'site-1',
-        identifier: null,
-        rental_info: null,
-        assigned_vehicle_id: null,
-        created_at: new Date(),
-        updated_at: new Date(),
-        deleted_at: null,
-      };
+    it('should find position containing the point', () => {
+      // Create test site, lot image, and parking position
+      db.prepare(
+        'INSERT INTO sites (id, name, address) VALUES (?, ?, ?)'
+      ).run('site-1', 'Test Site', '123 Test St');
 
-      mockPool.query.mockResolvedValue({ rows: [mockResult] } as any);
+      db.prepare(
+        'INSERT INTO lot_images (id, site_id, s3_key, width, height) VALUES (?, ?, ?, ?, ?)'
+      ).run('lot-1', 'site-1', 'test.jpg', 1000, 1000);
 
-      const result = await service.findPositionAtPoint('lot-1', 110, 110);
+      db.prepare(
+        `INSERT INTO parking_positions (id, site_id, lot_image_id, type, center_x, center_y, radius)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+      ).run('pos-1', 'site-1', 'lot-1', 'OPEN', 100, 100, 50);
+
+      const result = service.findPositionAtPoint('lot-1', 110, 110);
 
       expect(result).not.toBeNull();
       expect(result!.id).toBe('pos-1');
+      expect(result!.centerX).toBe(100);
+      expect(result!.centerY).toBe(100);
+      expect(result!.radius).toBe(50);
     });
 
-    it('should return null if no position contains the point', async () => {
-      mockPool.query.mockResolvedValue({ rows: [] } as any);
+    it('should return null if no position contains the point', () => {
+      // Create test site and lot image without positions
+      db.prepare(
+        'INSERT INTO sites (id, name, address) VALUES (?, ?, ?)'
+      ).run('site-1', 'Test Site', '123 Test St');
 
-      const result = await service.findPositionAtPoint('lot-1', 999, 999);
+      db.prepare(
+        'INSERT INTO lot_images (id, site_id, s3_key, width, height) VALUES (?, ?, ?, ?, ?)'
+      ).run('lot-1', 'site-1', 'test.jpg', 1000, 1000);
+
+      const result = service.findPositionAtPoint('lot-1', 999, 999);
 
       expect(result).toBeNull();
     });
   });
 
   describe('softDelete', () => {
-    it('should soft delete a position', async () => {
-      mockPool.query.mockResolvedValue({ rowCount: 1 } as any);
+    it('should soft delete a position', () => {
+      // Create test site, lot image, and parking position
+      db.prepare(
+        'INSERT INTO sites (id, name, address) VALUES (?, ?, ?)'
+      ).run('site-1', 'Test Site', '123 Test St');
 
-      await service.softDelete('pos-1');
+      db.prepare(
+        'INSERT INTO lot_images (id, site_id, s3_key, width, height) VALUES (?, ?, ?, ?, ?)'
+      ).run('lot-1', 'site-1', 'test.jpg', 1000, 1000);
 
-      expect(mockPool.query).toHaveBeenCalledWith(
-        expect.stringContaining('UPDATE parking_positions SET deleted_at'),
-        ['pos-1']
-      );
+      db.prepare(
+        `INSERT INTO parking_positions (id, site_id, lot_image_id, type, center_x, center_y, radius)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+      ).run('pos-1', 'site-1', 'lot-1', 'OPEN', 100, 100, 50);
+
+      service.softDelete('pos-1');
+
+      // Verify soft delete
+      const row = db.prepare('SELECT deleted_at FROM parking_positions WHERE id = ?').get('pos-1') as any;
+      expect(row.deleted_at).not.toBeNull();
+
+      // Verify excluded from normal queries
+      const result = db.prepare(
+        'SELECT * FROM parking_positions WHERE id = ? AND deleted_at IS NULL'
+      ).get('pos-1');
+      expect(result).toBeUndefined();
     });
 
-    it('should throw error if position not found', async () => {
-      mockPool.query.mockResolvedValue({ rowCount: 0 } as any);
-
-      await expect(service.softDelete('invalid-id')).rejects.toThrow(
+    it('should throw error if position not found', () => {
+      expect(() => service.softDelete('invalid-id')).toThrow(
         'Parking position not found'
       );
     });

@@ -1,4 +1,6 @@
-import { Pool } from 'pg';
+import Database from 'better-sqlite3';
+import { readFileSync } from 'fs';
+import { join } from 'path';
 import { ViolationService } from './violation';
 import {
   ViolationCategory,
@@ -8,97 +10,157 @@ import {
 } from '@cedar-terrace/shared';
 
 describe('ViolationService', () => {
-  let mockPool: jest.Mocked<Pool>;
-  let mockClient: any;
+  let db: Database.Database;
   let service: ViolationService;
 
   beforeEach(() => {
-    mockClient = {
-      query: jest.fn(),
-      release: jest.fn(),
-    };
+    // Create in-memory database
+    db = new Database(':memory:');
 
-    mockPool = {
-      query: jest.fn(),
-      connect: jest.fn().mockResolvedValue(mockClient),
-    } as any;
+    // Run migration to create schema
+    const migrationSql = readFileSync(
+      join(__dirname, '../db/migrations/001_initial_schema.sql'),
+      'utf-8'
+    );
+    db.exec(migrationSql);
 
-    service = new ViolationService(mockPool);
+    // Initialize service
+    service = new ViolationService(db);
+  });
+
+  afterEach(() => {
+    db.close();
   });
 
   describe('addEvent', () => {
-    it('should add event and update violation status', async () => {
-      const mockEvent = {
-        id: 'event-1',
-        violation_id: 'violation-1',
-        event_type: 'NOTICE_ISSUED',
-        event_at: new Date(),
-        observation_id: null,
-        notice_id: 'notice-1',
-        notes: null,
-        performed_by: 'ADMIN',
-        created_at: new Date(),
-        updated_at: new Date(),
-        deleted_at: null,
-      };
+    it('should add event and update violation status', () => {
+      // Create test data
+      db.prepare('INSERT INTO sites (id, name, address) VALUES (?, ?, ?)').run(
+        'site-1',
+        'Test Site',
+        '123 Test St'
+      );
+      db.prepare('INSERT INTO vehicles (id, license_plate, issuing_state, last_observed_at) VALUES (?, ?, ?, ?)').run(
+        'vehicle-1',
+        'ABC123',
+        'CA',
+        new Date().toISOString()
+      );
+      db.prepare(
+        `INSERT INTO violations (id, site_id, vehicle_id, category, status, detected_at)
+         VALUES (?, ?, ?, ?, ?, ?)`
+      ).run(
+        'violation-1',
+        'site-1',
+        'vehicle-1',
+        ViolationCategory.FIRE_LANE,
+        ViolationStatus.DETECTED,
+        new Date().toISOString()
+      );
 
-      mockClient.query
-        .mockResolvedValueOnce({ rows: [] }) // BEGIN
-        .mockResolvedValueOnce({ rows: [mockEvent] }) // INSERT event
-        .mockResolvedValueOnce({ rows: [] }) // UPDATE violation
-        .mockResolvedValueOnce({ rows: [] }); // COMMIT
-
-      const result = await service.addEvent('violation-1', ViolationEventType.NOTICE_ISSUED, {
+      const result = service.addEvent('violation-1', ViolationEventType.NOTICE_ISSUED, {
         noticeId: 'notice-1',
         performedBy: 'ADMIN',
       });
 
-      expect(result.id).toBe('event-1');
+      expect(result.id).toBeDefined();
       expect(result.eventType).toBe(ViolationEventType.NOTICE_ISSUED);
+      expect(result.violationId).toBe('violation-1');
+      expect(result.noticeId).toBe('notice-1');
+
+      // Verify violation status updated
+      const violation = db.prepare('SELECT status FROM violations WHERE id = ?').get('violation-1') as any;
+      expect(violation.status).toBe(ViolationStatus.NOTICE_ISSUED);
+
+      // Verify event in database
+      const event = db.prepare('SELECT * FROM violation_events WHERE id = ?').get(result.id);
+      expect(event).toBeDefined();
     });
 
-    it('should handle RESOLVED event and set resolved_at', async () => {
-      const mockEvent = {
-        id: 'event-1',
-        violation_id: 'violation-1',
-        event_type: 'RESOLVED',
-        event_at: new Date(),
-        observation_id: null,
-        notice_id: null,
-        notes: 'Fixed',
-        performed_by: 'ADMIN',
-        created_at: new Date(),
-        updated_at: new Date(),
-        deleted_at: null,
-      };
+    it('should handle RESOLVED event and set resolved_at', () => {
+      // Create test data
+      db.prepare('INSERT INTO sites (id, name, address) VALUES (?, ?, ?)').run(
+        'site-1',
+        'Test Site',
+        '123 Test St'
+      );
+      db.prepare('INSERT INTO vehicles (id, license_plate, issuing_state, last_observed_at) VALUES (?, ?, ?, ?)').run(
+        'vehicle-1',
+        'ABC123',
+        'CA',
+        new Date().toISOString()
+      );
+      db.prepare(
+        `INSERT INTO violations (id, site_id, vehicle_id, category, status, detected_at)
+         VALUES (?, ?, ?, ?, ?, ?)`
+      ).run(
+        'violation-1',
+        'site-1',
+        'vehicle-1',
+        ViolationCategory.FIRE_LANE,
+        ViolationStatus.NOTICE_ISSUED,
+        new Date().toISOString()
+      );
 
-      mockClient.query
-        .mockResolvedValueOnce({ rows: [] }) // BEGIN
-        .mockResolvedValueOnce({ rows: [mockEvent] }) // INSERT event
-        .mockResolvedValueOnce({ rows: [] }) // UPDATE status
-        .mockResolvedValueOnce({ rows: [] }) // UPDATE resolved_at
-        .mockResolvedValueOnce({ rows: [] }); // COMMIT
-
-      await service.addEvent('violation-1', ViolationEventType.RESOLVED, {
+      service.addEvent('violation-1', ViolationEventType.RESOLVED, {
         notes: 'Fixed',
         performedBy: 'ADMIN',
       });
 
-      expect(mockClient.query).toHaveBeenCalledWith(
-        expect.stringContaining('resolved_at = CURRENT_TIMESTAMP'),
-        ['violation-1']
-      );
+      // Verify resolved_at was set
+      const violation = db.prepare('SELECT resolved_at, status FROM violations WHERE id = ?').get('violation-1') as any;
+      expect(violation.resolved_at).not.toBeNull();
+      expect(violation.status).toBe(ViolationStatus.RESOLVED);
     });
   });
 
   describe('deriveFromObservation - unauthorized stall', () => {
-    it('should create violation for unauthorized vehicle in purchased stall', async () => {
+    it('should create violation for unauthorized vehicle in purchased stall', () => {
+      // Create test data
+      db.prepare('INSERT INTO sites (id, name, address) VALUES (?, ?, ?)').run(
+        'site-1',
+        'Test Site',
+        '123 Test St'
+      );
+      db.prepare('INSERT INTO vehicles (id, license_plate, issuing_state, last_observed_at) VALUES (?, ?, ?, ?)').run(
+        'vehicle-1',
+        'ABC123',
+        'CA',
+        new Date().toISOString()
+      );
+      db.prepare('INSERT INTO vehicles (id, license_plate, issuing_state, last_observed_at) VALUES (?, ?, ?, ?)').run(
+        'vehicle-2',
+        'XYZ789',
+        'CA',
+        new Date().toISOString()
+      );
+      db.prepare('INSERT INTO lot_images (id, site_id, s3_key, width, height) VALUES (?, ?, ?, ?, ?)').run(
+        'lot-1',
+        'site-1',
+        'test.jpg',
+        1000,
+        1000
+      );
+      // Create parking position
+      db.prepare(
+        `INSERT INTO parking_positions (id, site_id, lot_image_id, type, center_x, center_y, radius, assigned_vehicle_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run('pos-1', 'site-1', 'lot-1', 'PURCHASED', 100, 100, 50, 'vehicle-2');
+
+      const observedAt = new Date().toISOString();
+      // Create observation in database
+      db.prepare(
+        `INSERT INTO observations (id, site_id, vehicle_id, parking_position_id, observed_at,
+         license_plate, issuing_state, idempotency_key, submitted_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run('obs-1', 'site-1', 'vehicle-1', 'pos-1', observedAt, 'ABC123', 'CA', 'idem-1', 'ADMIN');
+
       const observation: any = {
         id: 'obs-1',
         siteId: 'site-1',
         vehicleId: 'vehicle-1',
         parkingPositionId: 'pos-1',
-        observedAt: new Date(),
+        observedAt: observedAt,
       };
 
       const position: any = {
@@ -107,38 +169,43 @@ describe('ViolationService', () => {
         assignedVehicleId: 'vehicle-2', // Different vehicle
       };
 
-      mockClient.query
-        .mockResolvedValueOnce({ rows: [] }) // BEGIN
-        .mockResolvedValueOnce({ rows: [] }) // Check existing violation
-        .mockResolvedValueOnce({ rows: [{ id: 'violation-1' }] }) // INSERT violation
-        .mockResolvedValueOnce({ rows: [] }) // INSERT event
-        .mockResolvedValueOnce({ rows: [] }); // COMMIT
-
-      const violationIds = await service.deriveFromObservation(
+      const violationIds = service.deriveFromObservation(
         observation,
         position,
         'ADMIN'
       );
 
       expect(violationIds.length).toBeGreaterThan(0);
-      expect(mockClient.query).toHaveBeenCalledWith(
-        expect.stringContaining('INSERT INTO violations'),
-        expect.arrayContaining([
-          observation.siteId,
-          observation.vehicleId,
-          position.id,
-          ViolationCategory.UNAUTHORIZED_STALL,
-        ])
-      );
+
+      // Verify violation was created
+      const violation = db.prepare(
+        'SELECT * FROM violations WHERE id = ? AND category = ?'
+      ).get(violationIds[0], ViolationCategory.UNAUTHORIZED_STALL) as any;
+      expect(violation).toBeDefined();
+      expect(violation.vehicle_id).toBe('vehicle-1');
+      expect(violation.parking_position_id).toBe('pos-1');
     });
 
-    it('should not create violation for authorized vehicle', async () => {
+    it('should not create violation for authorized vehicle', () => {
+      // Create test data
+      db.prepare('INSERT INTO sites (id, name, address) VALUES (?, ?, ?)').run(
+        'site-1',
+        'Test Site',
+        '123 Test St'
+      );
+      db.prepare('INSERT INTO vehicles (id, license_plate, issuing_state, last_observed_at) VALUES (?, ?, ?, ?)').run(
+        'vehicle-1',
+        'ABC123',
+        'CA',
+        new Date().toISOString()
+      );
+
       const observation: any = {
         id: 'obs-1',
         siteId: 'site-1',
         vehicleId: 'vehicle-1',
         parkingPositionId: 'pos-1',
-        observedAt: new Date(),
+        observedAt: new Date().toISOString(),
       };
 
       const position: any = {
@@ -147,11 +214,7 @@ describe('ViolationService', () => {
         assignedVehicleId: 'vehicle-1', // Same vehicle
       };
 
-      mockClient.query
-        .mockResolvedValueOnce({ rows: [] }) // BEGIN
-        .mockResolvedValueOnce({ rows: [] }); // COMMIT
-
-      const violationIds = await service.deriveFromObservation(
+      const violationIds = service.deriveFromObservation(
         observation,
         position,
         'ADMIN'
@@ -160,13 +223,66 @@ describe('ViolationService', () => {
       expect(violationIds).toEqual([]);
     });
 
-    it('should add observation to existing violation', async () => {
+    it('should add observation to existing violation', () => {
+      // Create test data
+      db.prepare('INSERT INTO sites (id, name, address) VALUES (?, ?, ?)').run(
+        'site-1',
+        'Test Site',
+        '123 Test St'
+      );
+      db.prepare('INSERT INTO vehicles (id, license_plate, issuing_state, last_observed_at) VALUES (?, ?, ?, ?)').run(
+        'vehicle-1',
+        'ABC123',
+        'CA',
+        new Date().toISOString()
+      );
+      db.prepare('INSERT INTO vehicles (id, license_plate, issuing_state, last_observed_at) VALUES (?, ?, ?, ?)').run(
+        'vehicle-2',
+        'XYZ789',
+        'CA',
+        new Date().toISOString()
+      );
+      db.prepare('INSERT INTO lot_images (id, site_id, s3_key, width, height) VALUES (?, ?, ?, ?, ?)').run(
+        'lot-1',
+        'site-1',
+        'test.jpg',
+        1000,
+        1000
+      );
+      // Create parking position
+      db.prepare(
+        `INSERT INTO parking_positions (id, site_id, lot_image_id, type, center_x, center_y, radius, assigned_vehicle_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run('pos-1', 'site-1', 'lot-1', 'PURCHASED', 100, 100, 50, 'vehicle-2');
+
+      // Create existing violation
+      db.prepare(
+        `INSERT INTO violations (id, site_id, vehicle_id, parking_position_id, category, status, detected_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+      ).run(
+        'existing-violation',
+        'site-1',
+        'vehicle-1',
+        'pos-1',
+        ViolationCategory.UNAUTHORIZED_STALL,
+        ViolationStatus.DETECTED,
+        new Date().toISOString()
+      );
+
+      const observedAt = new Date().toISOString();
+      // Create observation in database
+      db.prepare(
+        `INSERT INTO observations (id, site_id, vehicle_id, parking_position_id, observed_at,
+         license_plate, issuing_state, idempotency_key, submitted_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run('obs-2', 'site-1', 'vehicle-1', 'pos-1', observedAt, 'ABC123', 'CA', 'idem-2', 'ADMIN');
+
       const observation: any = {
         id: 'obs-2',
         siteId: 'site-1',
         vehicleId: 'vehicle-1',
         parkingPositionId: 'pos-1',
-        observedAt: new Date(),
+        observedAt: observedAt,
       };
 
       const position: any = {
@@ -175,59 +291,84 @@ describe('ViolationService', () => {
         assignedVehicleId: 'vehicle-2',
       };
 
-      mockClient.query
-        .mockResolvedValueOnce({ rows: [] }) // BEGIN
-        .mockResolvedValueOnce({ rows: [{ id: 'existing-violation' }] }) // Find existing
-        .mockResolvedValueOnce({ rows: [] }) // COMMIT
-
-      // Mock addEvent to avoid actual execution
-      jest.spyOn(service, 'addEvent').mockResolvedValue({} as any);
-
-      const violationIds = await service.deriveFromObservation(
+      const violationIds = service.deriveFromObservation(
         observation,
         position,
         'ADMIN'
       );
 
       expect(violationIds).toContain('existing-violation');
-      expect(service.addEvent).toHaveBeenCalledWith(
-        'existing-violation',
-        ViolationEventType.OBSERVATION_ADDED,
-        expect.objectContaining({
-          observationId: 'obs-2',
-        })
-      );
+
+      // Verify OBSERVATION_ADDED event was created
+      const events = db.prepare(
+        'SELECT * FROM violation_events WHERE violation_id = ? AND event_type = ?'
+      ).all('existing-violation', ViolationEventType.OBSERVATION_ADDED);
+      expect(events.length).toBeGreaterThan(0);
     });
   });
 
   describe('deriveFromObservation - expired registration', () => {
-    it('should create violation for expired registration', async () => {
+    it('should create violation for expired registration', () => {
+      // Create test data
+      db.prepare('INSERT INTO sites (id, name, address) VALUES (?, ?, ?)').run(
+        'site-1',
+        'Test Site',
+        '123 Test St'
+      );
+      db.prepare('INSERT INTO vehicles (id, license_plate, issuing_state, last_observed_at) VALUES (?, ?, ?, ?)').run(
+        'vehicle-1',
+        'ABC123',
+        'CA',
+        new Date().toISOString()
+      );
+
+      const observedAt = new Date().toISOString();
+      // Create observation in database
+      db.prepare(
+        `INSERT INTO observations (id, site_id, vehicle_id, observed_at, license_plate, issuing_state,
+         registration_year, registration_month, idempotency_key, submitted_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run('obs-1', 'site-1', 'vehicle-1', observedAt, 'ABC123', 'CA', 2020, 1, 'idem-1', 'ADMIN');
+
       const observation: any = {
         id: 'obs-1',
         siteId: 'site-1',
         vehicleId: 'vehicle-1',
         registrationYear: 2020,
         registrationMonth: 1,
-        observedAt: new Date(),
+        observedAt: observedAt,
       };
 
-      mockClient.query
-        .mockResolvedValueOnce({ rows: [] }) // BEGIN
-        .mockResolvedValueOnce({ rows: [] }) // Check existing
-        .mockResolvedValueOnce({ rows: [{ id: 'violation-1' }] }) // INSERT violation
-        .mockResolvedValueOnce({ rows: [] }) // INSERT event
-        .mockResolvedValueOnce({ rows: [] }); // COMMIT
-
-      const violationIds = await service.deriveFromObservation(
+      const violationIds = service.deriveFromObservation(
         observation,
         null,
         'ADMIN'
       );
 
       expect(violationIds.length).toBeGreaterThan(0);
+
+      // Verify violation was created
+      const violation = db.prepare(
+        'SELECT * FROM violations WHERE id = ? AND category = ?'
+      ).get(violationIds[0], ViolationCategory.EXPIRED_REGISTRATION) as any;
+      expect(violation).toBeDefined();
+      expect(violation.vehicle_id).toBe('vehicle-1');
     });
 
-    it('should not create violation for current registration', async () => {
+    it('should not create violation for current registration', () => {
+      // Create test data
+      db.prepare('INSERT INTO sites (id, name, address) VALUES (?, ?, ?)').run(
+        'site-1',
+        'Test Site',
+        '123 Test St'
+      );
+      db.prepare('INSERT INTO vehicles (id, license_plate, issuing_state, last_observed_at) VALUES (?, ?, ?, ?)').run(
+        'vehicle-1',
+        'ABC123',
+        'CA',
+        new Date().toISOString()
+      );
+
       const futureDate = new Date();
       futureDate.setFullYear(futureDate.getFullYear() + 1);
 
@@ -237,14 +378,10 @@ describe('ViolationService', () => {
         vehicleId: 'vehicle-1',
         registrationYear: futureDate.getFullYear(),
         registrationMonth: futureDate.getMonth() + 1,
-        observedAt: new Date(),
+        observedAt: new Date().toISOString(),
       };
 
-      mockClient.query
-        .mockResolvedValueOnce({ rows: [] }) // BEGIN
-        .mockResolvedValueOnce({ rows: [] }); // COMMIT
-
-      const violationIds = await service.deriveFromObservation(
+      const violationIds = service.deriveFromObservation(
         observation,
         null,
         'ADMIN'
@@ -255,27 +392,48 @@ describe('ViolationService', () => {
   });
 
   describe('evaluateTimelines', () => {
-    it('should transition violations based on timeline rules', async () => {
-      const oldViolation = {
-        id: 'violation-1',
-        category: ViolationCategory.FIRE_LANE,
-        status: ViolationStatus.DETECTED,
-        detected_at: new Date(Date.now() - 2 * 60 * 60 * 1000), // 2 hours ago
-      };
+    it('should transition violations based on timeline rules', () => {
+      // Create test data
+      db.prepare('INSERT INTO sites (id, name, address) VALUES (?, ?, ?)').run(
+        'site-1',
+        'Test Site',
+        '123 Test St'
+      );
+      db.prepare('INSERT INTO vehicles (id, license_plate, issuing_state, last_observed_at) VALUES (?, ?, ?, ?)').run(
+        'vehicle-1',
+        'ABC123',
+        'CA',
+        new Date().toISOString()
+      );
 
-      mockPool.query.mockResolvedValueOnce({ rows: [oldViolation] } as any);
+      // Create a violation that's old enough to be eligible for notice
+      // FIRE_LANE has noticeEligibleAfterHours: 0, so any old violation should transition
+      const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+      db.prepare(
+        `INSERT INTO violations (id, site_id, vehicle_id, category, status, detected_at)
+         VALUES (?, ?, ?, ?, ?, ?)`
+      ).run(
+        'violation-1',
+        'site-1',
+        'vehicle-1',
+        ViolationCategory.FIRE_LANE,
+        ViolationStatus.DETECTED,
+        twoHoursAgo
+      );
 
-      // Mock addEvent
-      jest.spyOn(service, 'addEvent').mockResolvedValue({} as any);
-
-      const count = await service.evaluateTimelines();
+      const count = service.evaluateTimelines();
 
       expect(count).toBeGreaterThan(0);
-      expect(service.addEvent).toHaveBeenCalledWith(
-        'violation-1',
-        ViolationEventType.NOTICE_ELIGIBLE,
-        expect.any(Object)
-      );
+
+      // Verify status was updated
+      const violation = db.prepare('SELECT status FROM violations WHERE id = ?').get('violation-1') as any;
+      expect(violation.status).toBe(ViolationStatus.NOTICE_ELIGIBLE);
+
+      // Verify event was created
+      const events = db.prepare(
+        'SELECT * FROM violation_events WHERE violation_id = ? AND event_type = ?'
+      ).all('violation-1', ViolationEventType.NOTICE_ELIGIBLE);
+      expect(events.length).toBeGreaterThan(0);
     });
   });
 });

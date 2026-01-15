@@ -1,4 +1,5 @@
-import { getPool } from './connection';
+import { v4 as uuidv4 } from 'uuid';
+import { getDatabase } from './connection';
 
 interface SeedData {
   siteId: string;
@@ -9,35 +10,47 @@ interface SeedData {
  * Seed the database with test data
  * Creates a test site, lot image, and parking positions
  */
-async function seed(): Promise<SeedData> {
-  const pool = getPool();
-  const client = await pool.connect();
+function seed(): SeedData {
+  const db = getDatabase();
 
-  try {
-    await client.query('BEGIN');
-
+  const transaction = db.transaction(() => {
     console.log('Seeding database with test data...');
 
     // Create test site
-    const siteResult = await client.query(
-      `INSERT INTO sites (name, address, timezone, is_active)
-       VALUES ($1, $2, $3, $4)
-       RETURNING id`,
-      ['Cedar Terrace Test Site', '123 Main St, Test City, TS 12345', 'America/Los_Angeles', true]
+    const siteId = uuidv4();
+    const now = new Date().toISOString();
+
+    db.prepare(
+      `INSERT INTO sites (id, name, address, timezone, is_active, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      siteId,
+      'Cedar Terrace Test Site',
+      '123 Main St, Test City, TS 12345',
+      'America/Los_Angeles',
+      1,
+      now,
+      now
     );
-    const siteId = siteResult.rows[0].id;
     console.log(`Created site: ${siteId}`);
 
     // Create lot image record
     // For testing, we'll use a placeholder image reference
     // In production, this would be uploaded to S3
-    const lotImageResult = await client.query(
-      `INSERT INTO lot_images (site_id, s3_key, width, height, is_active)
-       VALUES ($1, $2, $3, $4, $5)
-       RETURNING id`,
-      [siteId, 'test-lot-images/parking-lot-test.png', 1200, 800, true]
+    const lotImageId = uuidv4();
+    db.prepare(
+      `INSERT INTO lot_images (id, site_id, s3_key, width, height, is_active, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      lotImageId,
+      siteId,
+      'test-lot-images/parking-lot-test.png',
+      1200,
+      800,
+      1,
+      now,
+      now
     );
-    const lotImageId = lotImageResult.rows[0].id;
     console.log(`Created lot image: ${lotImageId}`);
 
     // Create parking positions
@@ -64,12 +77,25 @@ async function seed(): Promise<SeedData> {
     ];
 
     let positionCount = 0;
+    const insertPosition = db.prepare(
+      `INSERT INTO parking_positions
+       (id, site_id, lot_image_id, type, center_x, center_y, radius, identifier, rental_info, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    );
+
     for (const pos of positions) {
-      await client.query(
-        `INSERT INTO parking_positions
-         (site_id, lot_image_id, type, center_x, center_y, radius, identifier, rental_info)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-        [siteId, lotImageId, pos.type, pos.x, pos.y, 60, pos.identifier, pos.info]
+      insertPosition.run(
+        uuidv4(),
+        siteId,
+        lotImageId,
+        pos.type,
+        pos.x,
+        pos.y,
+        60,
+        pos.identifier,
+        pos.info,
+        now,
+        now
       );
       positionCount++;
     }
@@ -82,16 +108,26 @@ async function seed(): Promise<SeedData> {
       { plate: 'DEF456', state: 'OR', make: 'Ford', model: 'F150', color: 'Black' },
     ];
 
+    const insertVehicle = db.prepare(
+      `INSERT INTO vehicles (id, license_plate, issuing_state, make, model, color, last_observed_at, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    );
+
     for (const vehicle of vehicles) {
-      await client.query(
-        `INSERT INTO vehicles (license_plate, issuing_state, make, model, color, last_observed_at)
-         VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)`,
-        [vehicle.plate, vehicle.state, vehicle.make, vehicle.model, vehicle.color]
+      insertVehicle.run(
+        uuidv4(),
+        vehicle.plate,
+        vehicle.state,
+        vehicle.make,
+        vehicle.model,
+        vehicle.color,
+        now,
+        now,
+        now
       );
     }
     console.log(`Created ${vehicles.length} test vehicles`);
 
-    await client.query('COMMIT');
     console.log('Database seeding completed successfully!');
     console.log('\nTest Data Summary:');
     console.log(`Site ID: ${siteId}`);
@@ -106,35 +142,31 @@ async function seed(): Promise<SeedData> {
     console.log(`  R9: Reserved`);
 
     return { siteId, lotImageId };
-  } catch (error) {
-    await client.query('ROLLBACK');
-    console.error('Error seeding database:', error);
-    throw error;
-  } finally {
-    client.release();
-  }
+  });
+
+  return transaction();
 }
 
 /**
  * Clear all data (for testing)
  */
-async function clear(): Promise<void> {
-  const pool = getPool();
+function clear(): void {
+  const db = getDatabase();
 
   console.log('Clearing database...');
 
   // Delete in reverse dependency order
-  await pool.query('DELETE FROM recipient_access_logs');
-  await pool.query('DELETE FROM recipient_accounts');
-  await pool.query('DELETE FROM notices');
-  await pool.query('DELETE FROM violation_events');
-  await pool.query('DELETE FROM violations');
-  await pool.query('DELETE FROM evidence_items');
-  await pool.query('DELETE FROM observations');
-  await pool.query('DELETE FROM vehicles');
-  await pool.query('DELETE FROM parking_positions');
-  await pool.query('DELETE FROM lot_images');
-  await pool.query('DELETE FROM sites');
+  db.prepare('DELETE FROM recipient_access_logs').run();
+  db.prepare('DELETE FROM recipient_accounts').run();
+  db.prepare('DELETE FROM notices').run();
+  db.prepare('DELETE FROM violation_events').run();
+  db.prepare('DELETE FROM violations').run();
+  db.prepare('DELETE FROM evidence_items').run();
+  db.prepare('DELETE FROM observations').run();
+  db.prepare('DELETE FROM vehicles').run();
+  db.prepare('DELETE FROM parking_positions').run();
+  db.prepare('DELETE FROM lot_images').run();
+  db.prepare('DELETE FROM sites').run();
 
   console.log('Database cleared successfully!');
 }
@@ -144,19 +176,21 @@ if (require.main === module) {
   const command = process.argv[2];
 
   if (command === 'clear') {
-    clear()
-      .then(() => process.exit(0))
-      .catch((err) => {
-        console.error(err);
-        process.exit(1);
-      });
+    try {
+      clear();
+      process.exit(0);
+    } catch (err) {
+      console.error(err);
+      process.exit(1);
+    }
   } else {
-    seed()
-      .then(() => process.exit(0))
-      .catch((err) => {
-        console.error(err);
-        process.exit(1);
-      });
+    try {
+      seed();
+      process.exit(0);
+    } catch (err) {
+      console.error(err);
+      process.exit(1);
+    }
   }
 }
 

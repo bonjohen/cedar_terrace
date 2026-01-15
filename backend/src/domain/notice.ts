@@ -1,4 +1,4 @@
-import { Pool } from 'pg';
+import Database from 'better-sqlite3';
 import { Notice, IssueNoticeRequest, IssueNoticeResponse, Violation } from '@cedar-terrace/shared';
 import { v4 as uuidv4 } from 'uuid';
 import { ViolationService } from './violation';
@@ -20,42 +20,35 @@ interface NoticePayload {
 
 export class NoticeService {
   constructor(
-    private pool: Pool,
+    private db: Database.Database,
     private violationService: ViolationService
   ) {}
 
   /**
    * Issue a notice for a violation (idempotent)
    */
-  async issue(
+  issue(
     request: IssueNoticeRequest,
     issuedBy: string
-  ): Promise<IssueNoticeResponse> {
-    const client = await this.pool.connect();
-
-    try {
-      await client.query('BEGIN');
-
+  ): IssueNoticeResponse {
+    const transaction = this.db.transaction(() => {
       // Check for existing notice with this idempotency key
-      const existingResult = await client.query<Notice>(
-        'SELECT * FROM notices WHERE idempotency_key = $1 AND deleted_at IS NULL',
-        [request.idempotencyKey]
+      const existingStmt = this.db.prepare(
+        'SELECT * FROM notices WHERE idempotency_key = ? AND deleted_at IS NULL'
       );
+      const existing = existingStmt.get(request.idempotencyKey) as any;
 
-      if (existingResult.rows.length > 0) {
-        const existing = existingResult.rows[0];
-        await client.query('COMMIT');
-
+      if (existing) {
         return {
           noticeId: existing.id,
-          qrToken: (existing as any).qr_token,
-          textPayload: (existing as any).text_payload,
+          qrToken: existing.qr_token,
+          textPayload: existing.text_payload,
           created: false,
         };
       }
 
       // Get violation details
-      const violation = await this.violationService.getById(request.violationId);
+      const violation = this.violationService.getById(request.violationId);
       if (!violation) {
         throw new Error('Violation not found');
       }
@@ -64,102 +57,102 @@ export class NoticeService {
       const qrToken = this.generateQrToken();
 
       // Get additional details for notice
-      const details = await this.getViolationDetails(client, violation);
+      const details = this.getViolationDetails(violation);
 
       // Generate notice payload
       const payload = this.generatePayload(violation, details, qrToken);
 
       // Create notice
-      const noticeResult = await client.query<Notice>(
+      const noticeId = uuidv4();
+      const now = new Date().toISOString();
+
+      const noticeStmt = this.db.prepare(
         `INSERT INTO notices (
-          violation_id, issued_by, qr_token, text_payload, idempotency_key
-        ) VALUES ($1, $2, $3, $4, $5)
-        RETURNING *`,
-        [
-          request.violationId,
-          issuedBy,
-          qrToken,
-          JSON.stringify(payload),
-          request.idempotencyKey,
-        ]
+          id, violation_id, issued_by, qr_token, text_payload, idempotency_key, issued_at, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
       );
 
-      const notice = noticeResult.rows[0];
+      noticeStmt.run(
+        noticeId,
+        request.violationId,
+        issuedBy,
+        qrToken,
+        JSON.stringify(payload),
+        request.idempotencyKey,
+        now,
+        now,
+        now
+      );
 
       // Add violation event
-      await this.violationService.addEvent(
+      this.violationService.addEvent(
         request.violationId,
         ViolationEventType.NOTICE_ISSUED,
         {
-          noticeId: notice.id,
+          noticeId,
           performedBy: issuedBy,
         }
       );
 
-      await client.query('COMMIT');
-
       return {
-        noticeId: notice.id,
+        noticeId,
         qrToken,
         textPayload: JSON.stringify(payload),
         created: true,
       };
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
-    }
+    });
+
+    return transaction();
   }
 
   /**
    * Get notice by ID
    */
-  async getById(id: string): Promise<Notice | null> {
-    const result = await this.pool.query<Notice>(
-      'SELECT * FROM notices WHERE id = $1 AND deleted_at IS NULL',
-      [id]
+  getById(id: string): Notice | null {
+    const stmt = this.db.prepare(
+      'SELECT * FROM notices WHERE id = ? AND deleted_at IS NULL'
     );
+    const row = stmt.get(id) as any;
 
-    return result.rows.length > 0 ? this.mapRow(result.rows[0]) : null;
+    return row ? this.mapRow(row) : null;
   }
 
   /**
    * Get notice by QR token
    */
-  async getByQrToken(qrToken: string): Promise<Notice | null> {
-    const result = await this.pool.query<Notice>(
-      'SELECT * FROM notices WHERE qr_token = $1 AND deleted_at IS NULL',
-      [qrToken]
+  getByQrToken(qrToken: string): Notice | null {
+    const stmt = this.db.prepare(
+      'SELECT * FROM notices WHERE qr_token = ? AND deleted_at IS NULL'
     );
+    const row = stmt.get(qrToken) as any;
 
-    return result.rows.length > 0 ? this.mapRow(result.rows[0]) : null;
+    return row ? this.mapRow(row) : null;
   }
 
   /**
    * Get all notices for a violation
    */
-  async getByViolation(violationId: string): Promise<Notice[]> {
-    const result = await this.pool.query<Notice>(
+  getByViolation(violationId: string): Notice[] {
+    const stmt = this.db.prepare(
       `SELECT * FROM notices
-       WHERE violation_id = $1 AND deleted_at IS NULL
-       ORDER BY issued_at DESC`,
-      [violationId]
+       WHERE violation_id = ? AND deleted_at IS NULL
+       ORDER BY issued_at DESC`
     );
+    const rows = stmt.all(violationId);
 
-    return result.rows.map(this.mapRow);
+    return rows.map((row) => this.mapRow(row as any));
   }
 
   /**
    * Mark notice as printed
    */
-  async markPrinted(id: string): Promise<void> {
-    const result = await this.pool.query(
-      'UPDATE notices SET printed_at = CURRENT_TIMESTAMP WHERE id = $1 AND deleted_at IS NULL',
-      [id]
+  markPrinted(id: string): void {
+    const stmt = this.db.prepare(
+      'UPDATE notices SET printed_at = datetime(\'now\') WHERE id = ? AND deleted_at IS NULL'
     );
+    const result = stmt.run(id);
 
-    if (result.rowCount === 0) {
+    if (result.changes === 0) {
       throw new Error('Notice not found');
     }
   }
@@ -174,32 +167,32 @@ export class NoticeService {
   /**
    * Get additional violation details for notice generation
    */
-  private async getViolationDetails(
-    client: any,
+  private getViolationDetails(
     violation: Violation
-  ): Promise<{ licensePlate?: string; positionIdentifier?: string }> {
+  ): { licensePlate?: string; positionIdentifier?: string } {
     const details: { licensePlate?: string; positionIdentifier?: string } = {};
 
     // Get vehicle license plate
     if (violation.vehicleId) {
-      const vehicleResult = await client.query(
-        'SELECT license_plate, issuing_state FROM vehicles WHERE id = $1',
-        [violation.vehicleId]
+      const vehicleStmt = this.db.prepare(
+        'SELECT license_plate, issuing_state FROM vehicles WHERE id = ?'
       );
-      if (vehicleResult.rows.length > 0) {
-        const vehicle = vehicleResult.rows[0];
+      const vehicle = vehicleStmt.get(violation.vehicleId) as any;
+
+      if (vehicle) {
         details.licensePlate = `${vehicle.license_plate} (${vehicle.issuing_state})`;
       }
     }
 
     // Get parking position identifier
     if (violation.parkingPositionId) {
-      const positionResult = await client.query(
-        'SELECT identifier FROM parking_positions WHERE id = $1',
-        [violation.parkingPositionId]
+      const positionStmt = this.db.prepare(
+        'SELECT identifier FROM parking_positions WHERE id = ?'
       );
-      if (positionResult.rows.length > 0 && positionResult.rows[0].identifier) {
-        details.positionIdentifier = positionResult.rows[0].identifier;
+      const position = positionStmt.get(violation.parkingPositionId) as any;
+
+      if (position && position.identifier) {
+        details.positionIdentifier = position.identifier;
       }
     }
 

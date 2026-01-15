@@ -1,4 +1,4 @@
-import { Pool } from 'pg';
+import Database from 'better-sqlite3';
 import {
   RecipientAccount,
   RecipientAccessLog,
@@ -14,7 +14,7 @@ import { StorageService } from '../services/storage';
 
 export class RecipientService {
   constructor(
-    private pool: Pool,
+    private db: Database.Database,
     private noticeService: NoticeService,
     private violationService: ViolationService,
     private storageService: StorageService
@@ -24,33 +24,34 @@ export class RecipientService {
    * Initiate ticket access from QR code
    * Creates or updates recipient account and sends activation email
    */
-  async initiateAccess(request: InitiateTicketAccessRequest): Promise<InitiateTicketAccessResponse> {
-    const client = await this.pool.connect();
-
-    try {
-      await client.query('BEGIN');
-
+  initiateAccess(request: InitiateTicketAccessRequest): InitiateTicketAccessResponse {
+    const transaction = this.db.transaction(() => {
       // Verify QR token exists
-      const notice = await this.noticeService.getByQrToken(request.qrToken);
+      const notice = this.noticeService.getByQrToken(request.qrToken);
       if (!notice) {
         throw new Error('Invalid QR token');
       }
 
       // Find or create recipient account
-      let account = await this.findByEmail(request.email);
+      let account = this.findByEmail(request.email);
 
       if (!account) {
         // Create new account
         const activationToken = this.generateActivationToken();
+        const accountId = uuidv4();
+        const now = new Date().toISOString();
 
-        const result = await client.query<RecipientAccount>(
-          `INSERT INTO recipient_accounts (email, activation_token, activation_sent_at)
-           VALUES ($1, $2, CURRENT_TIMESTAMP)
-           RETURNING *`,
-          [request.email, activationToken]
+        const stmt = this.db.prepare(
+          `INSERT INTO recipient_accounts (id, email, activation_token, activation_sent_at, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?)`
         );
 
-        account = this.mapAccountRow(result.rows[0]);
+        stmt.run(accountId, request.email, activationToken, now, now, now);
+
+        account = this.getById(accountId);
+        if (!account) {
+          throw new Error('Failed to create recipient account');
+        }
 
         // Queue activation email (would be sent by email worker)
         // For now, we'll just log it
@@ -58,71 +59,93 @@ export class RecipientService {
       } else if (!account.emailVerifiedAt) {
         // Resend activation if not verified
         const activationToken = this.generateActivationToken();
+        const now = new Date().toISOString();
 
-        await client.query(
+        const updateStmt = this.db.prepare(
           `UPDATE recipient_accounts
-           SET activation_token = $1, activation_sent_at = CURRENT_TIMESTAMP
-           WHERE id = $2`,
-          [activationToken, account.id]
+           SET activation_token = ?, activation_sent_at = ?
+           WHERE id = ?`
         );
+
+        updateStmt.run(activationToken, now, account.id);
 
         console.log(`Activation email re-queued for ${request.email} with token ${activationToken}`);
       }
-
-      await client.query('COMMIT');
 
       return {
         recipientAccountId: account.id,
         activationRequired: !account.emailVerifiedAt,
       };
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
-    }
+    });
+
+    return transaction();
   }
 
   /**
    * Activate recipient account using emailed token
    */
-  async activateAccount(activationToken: string): Promise<RecipientAccount> {
-    const result = await this.pool.query<RecipientAccount>(
+  activateAccount(activationToken: string): RecipientAccount {
+    const now = new Date().toISOString();
+
+    const stmt = this.db.prepare(
       `UPDATE recipient_accounts
-       SET email_verified_at = CURRENT_TIMESTAMP, activation_token = NULL
-       WHERE activation_token = $1 AND deleted_at IS NULL
-       RETURNING *`,
-      [activationToken]
+       SET email_verified_at = ?, activation_token = NULL
+       WHERE activation_token = ? AND deleted_at IS NULL`
     );
 
-    if (result.rows.length === 0) {
+    const result = stmt.run(now, activationToken);
+
+    if (result.changes === 0) {
       throw new Error('Invalid or expired activation token');
     }
 
-    return this.mapAccountRow(result.rows[0]);
+    // Get the updated account
+    const getStmt = this.db.prepare(
+      'SELECT * FROM recipient_accounts WHERE email_verified_at = ? AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT 1'
+    );
+    const row = getStmt.get(now) as any;
+
+    if (!row) {
+      throw new Error('Failed to retrieve activated account');
+    }
+
+    return this.mapAccountRow(row);
   }
 
   /**
    * Complete recipient profile (required before viewing ticket)
    */
-  async completeProfile(
+  completeProfile(
     accountId: string,
     request: CompleteRecipientProfileRequest
-  ): Promise<RecipientAccount> {
-    const result = await this.pool.query<RecipientAccount>(
+  ): RecipientAccount {
+    const now = new Date().toISOString();
+
+    const stmt = this.db.prepare(
       `UPDATE recipient_accounts
-       SET first_name = $1, last_name = $2, phone_number = $3,
-           profile_completed_at = CURRENT_TIMESTAMP
-       WHERE id = $4 AND deleted_at IS NULL
-       RETURNING *`,
-      [request.firstName, request.lastName, request.phoneNumber || null, accountId]
+       SET first_name = ?, last_name = ?, phone_number = ?,
+           profile_completed_at = ?
+       WHERE id = ? AND deleted_at IS NULL`
     );
 
-    if (result.rows.length === 0) {
+    const result = stmt.run(
+      request.firstName,
+      request.lastName,
+      request.phoneNumber || null,
+      now,
+      accountId
+    );
+
+    if (result.changes === 0) {
       throw new Error('Recipient account not found');
     }
 
-    return this.mapAccountRow(result.rows[0]);
+    const account = this.getById(accountId);
+    if (!account) {
+      throw new Error('Failed to retrieve updated account');
+    }
+
+    return account;
   }
 
   /**
@@ -134,145 +157,147 @@ export class RecipientService {
     ipAddress?: string,
     userAgent?: string
   ): Promise<TicketDetailResponse> {
-    const client = await this.pool.connect();
-
-    try {
-      await client.query('BEGIN');
-
-      // Verify account and profile completion
-      const account = await this.getById(accountId);
-      if (!account) {
-        throw new Error('Recipient account not found');
-      }
-
-      if (!account.emailVerifiedAt) {
-        throw new Error('Email not verified');
-      }
-
-      if (!account.profileCompletedAt) {
-        throw new Error('Profile not completed');
-      }
-
-      // Get notice
-      const notice = await this.noticeService.getByQrToken(qrToken);
-      if (!notice) {
-        throw new Error('Notice not found');
-      }
-
-      // Log access
-      await client.query(
-        `INSERT INTO recipient_access_logs (
-          recipient_account_id, notice_id, ip_address, user_agent
-        ) VALUES ($1, $2, $3, $4)`,
-        [accountId, notice.id, ipAddress || null, userAgent || null]
-      );
-
-      // Get violation details
-      const violation = await this.violationService.getById(notice.violationId);
-      if (!violation) {
-        throw new Error('Violation not found');
-      }
-
-      // Get vehicle details
-      const vehicleResult = await client.query(
-        'SELECT license_plate, issuing_state FROM vehicles WHERE id = $1',
-        [violation.vehicleId]
-      );
-
-      if (vehicleResult.rows.length === 0) {
-        throw new Error('Vehicle not found');
-      }
-
-      const vehicle = vehicleResult.rows[0];
-
-      // Get evidence items
-      const evidenceResult = await client.query(
-        `SELECT ei.s3_key
-         FROM evidence_items ei
-         JOIN violation_events ve ON ve.observation_id = ei.observation_id
-         WHERE ve.violation_id = $1
-           AND ei.type = 'PHOTO'
-           AND ei.deleted_at IS NULL
-           AND ve.deleted_at IS NULL
-         LIMIT 10`,
-        [violation.id]
-      );
-
-      // Generate pre-signed URLs for evidence
-      const evidenceUrls: string[] = [];
-      for (const row of evidenceResult.rows) {
-        if (row.s3_key) {
-          const url = await this.storageService.getDownloadUrl(row.s3_key, 3600);
-          evidenceUrls.push(url);
-        }
-      }
-
-      // Parse notice payload
-      const payload = JSON.parse(notice.textPayload);
-
-      await client.query('COMMIT');
-
-      return {
-        violation: {
-          category: violation.category,
-          status: violation.status,
-          detectedAt: violation.detectedAt.toISOString(),
-        },
-        vehicle: {
-          licensePlate: vehicle.license_plate,
-          issuingState: vehicle.issuing_state,
-        },
-        notice: {
-          issuedAt: notice.issuedAt.toISOString(),
-          deadlines: payload.deadlines || {},
-          instructions: payload.instructions || '',
-        },
-        evidenceUrls,
-      };
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
+    // Verify account and profile completion
+    const account = this.getById(accountId);
+    if (!account) {
+      throw new Error('Recipient account not found');
     }
+
+    if (!account.emailVerifiedAt) {
+      throw new Error('Email not verified');
+    }
+
+    if (!account.profileCompletedAt) {
+      throw new Error('Profile not completed');
+    }
+
+    // Get notice
+    const notice = this.noticeService.getByQrToken(qrToken);
+    if (!notice) {
+      throw new Error('Notice not found');
+    }
+
+    // Log access (within transaction)
+    const transaction = this.db.transaction(() => {
+      const logId = uuidv4();
+      const now = new Date().toISOString();
+
+      const logStmt = this.db.prepare(
+        `INSERT INTO recipient_access_logs (
+          id, recipient_account_id, notice_id, ip_address, user_agent, accessed_at, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      );
+
+      logStmt.run(
+        logId,
+        accountId,
+        notice.id,
+        ipAddress || null,
+        userAgent || null,
+        now,
+        now,
+        now
+      );
+    });
+
+    transaction();
+
+    // Get violation details
+    const violation = this.violationService.getById(notice.violationId);
+    if (!violation) {
+      throw new Error('Violation not found');
+    }
+
+    // Get vehicle details
+    const vehicleStmt = this.db.prepare(
+      'SELECT license_plate, issuing_state FROM vehicles WHERE id = ?'
+    );
+    const vehicle = vehicleStmt.get(violation.vehicleId) as any;
+
+    if (!vehicle) {
+      throw new Error('Vehicle not found');
+    }
+
+    // Get evidence items
+    const evidenceStmt = this.db.prepare(
+      `SELECT ei.s3_key
+       FROM evidence_items ei
+       JOIN violation_events ve ON ve.observation_id = ei.observation_id
+       WHERE ve.violation_id = ?
+         AND ei.type = 'PHOTO'
+         AND ei.deleted_at IS NULL
+         AND ve.deleted_at IS NULL
+       LIMIT 10`
+    );
+    const evidenceRows = evidenceStmt.all(violation.id) as any[];
+
+    // Generate pre-signed URLs for evidence
+    const evidenceUrls: string[] = [];
+    for (const row of evidenceRows) {
+      if (row.s3_key) {
+        const url = await this.storageService.getDownloadUrl(row.s3_key, 3600);
+        evidenceUrls.push(url);
+      }
+    }
+
+    // Parse notice payload
+    const payload = JSON.parse(notice.textPayload);
+
+    return {
+      violation: {
+        category: violation.category,
+        status: violation.status,
+        detectedAt: violation.detectedAt.toISOString(),
+      },
+      vehicle: {
+        licensePlate: vehicle.license_plate,
+        issuingState: vehicle.issuing_state,
+      },
+      notice: {
+        issuedAt: notice.issuedAt.toISOString(),
+        deadlines: payload.deadlines || {},
+        instructions: payload.instructions || '',
+      },
+      evidenceUrls,
+    };
   }
 
   /**
    * Get recipient account by ID
    */
-  async getById(id: string): Promise<RecipientAccount | null> {
-    const result = await this.pool.query<RecipientAccount>(
-      'SELECT * FROM recipient_accounts WHERE id = $1 AND deleted_at IS NULL',
-      [id]
+  getById(id: string): RecipientAccount | null {
+    const stmt = this.db.prepare(
+      'SELECT * FROM recipient_accounts WHERE id = ? AND deleted_at IS NULL'
     );
+    const row = stmt.get(id) as any;
 
-    return result.rows.length > 0 ? this.mapAccountRow(result.rows[0]) : null;
+    return row ? this.mapAccountRow(row) : null;
   }
 
   /**
    * Find recipient account by email
    */
-  async findByEmail(email: string): Promise<RecipientAccount | null> {
-    const result = await this.pool.query<RecipientAccount>(
-      'SELECT * FROM recipient_accounts WHERE email = $1 AND deleted_at IS NULL',
-      [email]
+  findByEmail(email: string): RecipientAccount | null {
+    const stmt = this.db.prepare(
+      'SELECT * FROM recipient_accounts WHERE email = ? AND deleted_at IS NULL'
     );
+    const row = stmt.get(email) as any;
 
-    return result.rows.length > 0 ? this.mapAccountRow(result.rows[0]) : null;
+    return row ? this.mapAccountRow(row) : null;
   }
 
   /**
    * Get access logs for a notice
    */
-  async getAccessLogs(noticeId: string): Promise<RecipientAccessLog[]> {
-    const result = await this.pool.query<RecipientAccessLog>(
+  getAccessLogs(noticeId: string): RecipientAccessLog[] {
+    const stmt = this.db.prepare(
       `SELECT * FROM recipient_access_logs
-       WHERE notice_id = $1 AND deleted_at IS NULL
-       ORDER BY accessed_at DESC`,
-      [noticeId]
+       WHERE notice_id = ? AND deleted_at IS NULL
+       ORDER BY accessed_at DESC`
     );
+    const rows = stmt.all(noticeId);
 
-    return result.rows.map(this.mapAccessLogRow);
+    return rows.map((row) => this.mapAccessLogRow(row as any));
   }
 
   /**

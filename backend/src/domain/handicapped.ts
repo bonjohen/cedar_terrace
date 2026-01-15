@@ -1,4 +1,5 @@
-import { Pool } from 'pg';
+import Database from 'better-sqlite3';
+import { v4 as uuidv4 } from 'uuid';
 import {
   Violation,
   ViolationCategory,
@@ -14,7 +15,7 @@ import { ViolationService } from './violation';
  */
 export class HandicappedEnforcementService {
   constructor(
-    private pool: Pool,
+    private db: Database.Database,
     private violationService: ViolationService
   ) {}
 
@@ -22,33 +23,32 @@ export class HandicappedEnforcementService {
    * Evaluate handicapped violations for a vehicle based on all observations
    * This is called when new evidence is added that might contain placard photos
    */
-  async evaluateHandicappedCompliance(
+  evaluateHandicappedCompliance(
     vehicleId: string,
     newObservationId: string
-  ): Promise<void> {
-    const client = await this.pool.connect();
-
-    try {
-      await client.query('BEGIN');
-
+  ): void {
+    const transaction = this.db.transaction(() => {
       // Find all active handicapped violations for this vehicle
-      const violations = await client.query<Violation>(
+      const violationsStmt = this.db.prepare(
         `SELECT * FROM violations
-         WHERE vehicle_id = $1
-           AND category = $2
+         WHERE vehicle_id = ?
+           AND category = ?
            AND status NOT IN ('RESOLVED', 'DISMISSED')
-           AND deleted_at IS NULL`,
-        [vehicleId, ViolationCategory.HANDICAPPED_NO_PLACARD]
+           AND deleted_at IS NULL`
       );
+      const violations = violationsStmt.all(
+        vehicleId,
+        ViolationCategory.HANDICAPPED_NO_PLACARD
+      ) as any[];
 
-      for (const violation of violations.rows) {
+      for (const violationRow of violations) {
         // Check if we now have placard evidence
-        const hasPlacard = await this.hasPlacardEvidence(client, violation.id);
+        const hasPlacard = this.hasPlacardEvidence(violationRow.id);
 
         if (hasPlacard) {
           // Resolve the violation with explanation
-          await this.violationService.addEvent(
-            violation.id,
+          this.violationService.addEvent(
+            violationRow.id,
             ViolationEventType.RESOLVED,
             {
               observationId: newObservationId,
@@ -58,82 +58,77 @@ export class HandicappedEnforcementService {
           );
         }
       }
+    });
 
-      await client.query('COMMIT');
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
-    }
+    transaction();
   }
 
   /**
    * Check if any observation for this violation has placard evidence
    */
-  private async hasPlacardEvidence(client: any, violationId: string): Promise<boolean> {
-    const result = await client.query(
+  private hasPlacardEvidence(violationId: string): boolean {
+    const stmt = this.db.prepare(
       `SELECT COUNT(*) as count
        FROM evidence_items ei
        JOIN violation_events ve ON ve.observation_id = ei.observation_id
-       WHERE ve.violation_id = $1
-         AND ei.intent = $2
+       WHERE ve.violation_id = ?
+         AND ei.intent = ?
          AND ei.deleted_at IS NULL
-         AND ve.deleted_at IS NULL`,
-      [violationId, EvidenceIntent.HANDICAPPED_PLACARD]
+         AND ve.deleted_at IS NULL`
     );
+    const result = stmt.get(violationId, EvidenceIntent.HANDICAPPED_PLACARD) as any;
 
-    return parseInt(result.rows[0].count) > 0;
+    return parseInt(result.count) > 0;
   }
 
   /**
    * Check if vehicle has general placard evidence across all observations
    * Used for administrative queries, not enforcement decisions
    */
-  async vehicleHasPlacardEvidence(vehicleId: string): Promise<boolean> {
-    const result = await this.pool.query(
+  vehicleHasPlacardEvidence(vehicleId: string): boolean {
+    const stmt = this.db.prepare(
       `SELECT COUNT(*) as count
        FROM evidence_items ei
        JOIN observations o ON o.id = ei.observation_id
-       WHERE o.vehicle_id = $1
-         AND ei.intent = $2
+       WHERE o.vehicle_id = ?
+         AND ei.intent = ?
          AND ei.deleted_at IS NULL
-         AND o.deleted_at IS NULL`,
-      [vehicleId, EvidenceIntent.HANDICAPPED_PLACARD]
+         AND o.deleted_at IS NULL`
     );
+    const result = stmt.get(vehicleId, EvidenceIntent.HANDICAPPED_PLACARD) as any;
 
-    return parseInt(result.rows[0].count) > 0;
+    return parseInt(result.count) > 0;
   }
 
   /**
    * Get all placard evidence for a vehicle
    */
-  async getPlacardEvidence(vehicleId: string): Promise<EvidenceItem[]> {
-    const result = await this.pool.query(
+  getPlacardEvidence(vehicleId: string): EvidenceItem[] {
+    const stmt = this.db.prepare(
       `SELECT ei.*
        FROM evidence_items ei
        JOIN observations o ON o.id = ei.observation_id
-       WHERE o.vehicle_id = $1
-         AND ei.intent = $2
+       WHERE o.vehicle_id = ?
+         AND ei.intent = ?
          AND ei.deleted_at IS NULL
          AND o.deleted_at IS NULL
-       ORDER BY ei.captured_at DESC`,
-      [vehicleId, EvidenceIntent.HANDICAPPED_PLACARD]
+       ORDER BY ei.captured_at DESC`
     );
+    const rows = stmt.all(vehicleId, EvidenceIntent.HANDICAPPED_PLACARD);
 
-    return result.rows.map(this.mapEvidenceRow);
+    return rows.map((row) => this.mapEvidenceRow(row as any));
   }
 
   /**
    * Manually resolve a handicapped violation with admin notes
    * Used when admin confirms placard through other means
    */
-  async manuallyResolveWithPlacard(
+  manuallyResolveWithPlacard(
     violationId: string,
     adminNotes: string,
     performedBy: string
-  ): Promise<void> {
-    await this.violationService.addEvent(violationId, ViolationEventType.RESOLVED, {
+  ): void {
+    this.violationService.addEvent(violationId, ViolationEventType.RESOLVED, {
       notes: `Manually resolved by admin: ${adminNotes}`,
       performedBy,
     });
@@ -143,29 +138,44 @@ export class HandicappedEnforcementService {
    * Create a text note documenting placard visibility
    * This can be added to an observation when placard is visible but not photographed
    */
-  async addPlacardNote(
+  addPlacardNote(
     observationId: string,
     noteText: string
-  ): Promise<void> {
-    await this.pool.query(
-      `INSERT INTO evidence_items (
-        observation_id, type, note_text, intent
-      ) VALUES ($1, 'TEXT_NOTE', $2, $3)`,
-      [observationId, noteText, EvidenceIntent.HANDICAPPED_PLACARD]
-    );
+  ): void {
+    const transaction = this.db.transaction(() => {
+      const evidenceId = uuidv4();
+      const now = new Date().toISOString();
 
-    // Re-evaluate compliance for this vehicle
-    const observation = await this.pool.query(
-      'SELECT vehicle_id FROM observations WHERE id = $1',
-      [observationId]
-    );
-
-    if (observation.rows.length > 0 && observation.rows[0].vehicle_id) {
-      await this.evaluateHandicappedCompliance(
-        observation.rows[0].vehicle_id,
-        observationId
+      const insertStmt = this.db.prepare(
+        `INSERT INTO evidence_items (
+          id, observation_id, type, note_text, intent, created_at, updated_at
+        ) VALUES (?, ?, 'TEXT_NOTE', ?, ?, ?, ?)`
       );
-    }
+
+      insertStmt.run(
+        evidenceId,
+        observationId,
+        noteText,
+        EvidenceIntent.HANDICAPPED_PLACARD,
+        now,
+        now
+      );
+
+      // Re-evaluate compliance for this vehicle
+      const observationStmt = this.db.prepare(
+        'SELECT vehicle_id FROM observations WHERE id = ?'
+      );
+      const observation = observationStmt.get(observationId) as any;
+
+      if (observation && observation.vehicle_id) {
+        this.evaluateHandicappedCompliance(
+          observation.vehicle_id,
+          observationId
+        );
+      }
+    });
+
+    transaction();
   }
 
   private mapEvidenceRow(row: any): EvidenceItem {

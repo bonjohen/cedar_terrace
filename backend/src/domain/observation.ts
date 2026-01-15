@@ -1,4 +1,5 @@
-import { Pool } from 'pg';
+import Database from 'better-sqlite3';
+import { v4 as uuidv4 } from 'uuid';
 import {
   Observation,
   EvidenceItem,
@@ -8,35 +9,28 @@ import {
 } from '@cedar-terrace/shared';
 
 export class ObservationService {
-  constructor(private pool: Pool) {}
+  constructor(private db: Database.Database) {}
 
   /**
    * Submit a new observation with evidence (idempotent)
    * Returns existing observation if idempotency key matches
    */
-  async submit(
+  submit(
     request: SubmitObservationRequest,
     submittedBy: string
-  ): Promise<SubmitObservationResponse> {
-    const client = await this.pool.connect();
-
-    try {
-      await client.query('BEGIN');
-
+  ): SubmitObservationResponse {
+    const transaction = this.db.transaction(() => {
       // Check for existing observation with this idempotency key
-      const existingResult = await client.query<Observation>(
-        'SELECT * FROM observations WHERE idempotency_key = $1 AND deleted_at IS NULL',
-        [request.idempotencyKey]
+      const existingStmt = this.db.prepare(
+        'SELECT * FROM observations WHERE idempotency_key = ? AND deleted_at IS NULL'
       );
+      const existing = existingStmt.get(request.idempotencyKey) as any;
 
-      if (existingResult.rows.length > 0) {
-        const existing = existingResult.rows[0];
-        await client.query('COMMIT');
-
+      if (existing) {
         // Return existing observation (idempotent)
         return {
           observationId: existing.id,
-          vehicleId: (existing as any).vehicle_id || undefined,
+          vehicleId: existing.vehicle_id || undefined,
           violationIds: [], // Would need to query violations
           created: false,
         };
@@ -50,8 +44,7 @@ export class ObservationService {
       // Find or create vehicle if license plate provided
       let vehicleId: string | null = null;
       if (request.licensePlate && request.issuingState) {
-        vehicleId = await this.findOrCreateVehicle(
-          client,
+        vehicleId = this.findOrCreateVehicle(
           request.licensePlate,
           request.issuingState,
           new Date(request.observedAt)
@@ -59,156 +52,159 @@ export class ObservationService {
       }
 
       // Create observation
-      const observationResult = await client.query<Observation>(
+      const observationId = uuidv4();
+      const now = new Date().toISOString();
+
+      const observationStmt = this.db.prepare(
         `INSERT INTO observations (
-          site_id, vehicle_id, parking_position_id, observed_at,
+          id, site_id, vehicle_id, parking_position_id, observed_at,
           license_plate, issuing_state, registration_month, registration_year,
-          idempotency_key, submitted_by
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-        RETURNING *`,
-        [
-          request.siteId,
-          vehicleId,
-          request.parkingPositionId || null,
-          request.observedAt,
-          request.licensePlate || null,
-          request.issuingState || null,
-          request.registrationMonth || null,
-          request.registrationYear || null,
-          request.idempotencyKey,
-          submittedBy,
-        ]
+          idempotency_key, submitted_by, submitted_at, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       );
 
-      const observation = observationResult.rows[0];
+      observationStmt.run(
+        observationId,
+        request.siteId,
+        vehicleId,
+        request.parkingPositionId || null,
+        request.observedAt,
+        request.licensePlate || null,
+        request.issuingState || null,
+        request.registrationMonth || null,
+        request.registrationYear || null,
+        request.idempotencyKey,
+        submittedBy,
+        now,
+        now,
+        now
+      );
 
       // Create evidence items
+      const evidenceStmt = this.db.prepare(
+        `INSERT INTO evidence_items (
+          id, observation_id, type, s3_key, captured_at, intent, note_text, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      );
+
       for (const evidence of request.evidence) {
-        await client.query(
-          `INSERT INTO evidence_items (
-            observation_id, type, s3_key, captured_at, intent, note_text
-          ) VALUES ($1, $2, $3, $4, $5, $6)`,
-          [
-            observation.id,
-            evidence.type,
-            evidence.s3Key || null,
-            evidence.capturedAt || null,
-            evidence.intent || null,
-            evidence.noteText || null,
-          ]
+        evidenceStmt.run(
+          uuidv4(),
+          observationId,
+          evidence.type,
+          evidence.s3Key || null,
+          evidence.capturedAt || null,
+          evidence.intent || null,
+          evidence.noteText || null,
+          now,
+          now
         );
       }
 
-      await client.query('COMMIT');
-
       return {
-        observationId: observation.id,
+        observationId,
         vehicleId: vehicleId || undefined,
         violationIds: [], // Violations will be derived asynchronously
         created: true,
       };
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
-    }
+    });
+
+    return transaction();
   }
 
-  async getById(id: string): Promise<Observation | null> {
-    const result = await this.pool.query<Observation>(
-      'SELECT * FROM observations WHERE id = $1 AND deleted_at IS NULL',
-      [id]
+  getById(id: string): Observation | null {
+    const stmt = this.db.prepare(
+      'SELECT * FROM observations WHERE id = ? AND deleted_at IS NULL'
     );
+    const row = stmt.get(id) as any;
 
-    return result.rows.length > 0 ? this.mapObservationRow(result.rows[0]) : null;
+    return row ? this.mapObservationRow(row) : null;
   }
 
-  async getEvidence(observationId: string): Promise<EvidenceItem[]> {
-    const result = await this.pool.query(
+  getEvidence(observationId: string): EvidenceItem[] {
+    const stmt = this.db.prepare(
       `SELECT * FROM evidence_items
-       WHERE observation_id = $1 AND deleted_at IS NULL
-       ORDER BY created_at`,
-      [observationId]
+       WHERE observation_id = ? AND deleted_at IS NULL
+       ORDER BY created_at`
     );
+    const rows = stmt.all(observationId);
 
-    return result.rows.map(this.mapEvidenceRow);
+    return rows.map((row) => this.mapEvidenceRow(row as any));
   }
 
-  async getByVehicle(vehicleId: string, limit = 50): Promise<Observation[]> {
-    const result = await this.pool.query<Observation>(
+  getByVehicle(vehicleId: string, limit = 50): Observation[] {
+    const stmt = this.db.prepare(
       `SELECT * FROM observations
-       WHERE vehicle_id = $1 AND deleted_at IS NULL
+       WHERE vehicle_id = ? AND deleted_at IS NULL
        ORDER BY observed_at DESC
-       LIMIT $2`,
-      [vehicleId, limit]
+       LIMIT ?`
     );
+    const rows = stmt.all(vehicleId, limit);
 
-    return result.rows.map(this.mapObservationRow);
+    return rows.map((row) => this.mapObservationRow(row as any));
   }
 
-  async getByPosition(positionId: string, limit = 50): Promise<Observation[]> {
-    const result = await this.pool.query<Observation>(
+  getByPosition(positionId: string, limit = 50): Observation[] {
+    const stmt = this.db.prepare(
       `SELECT * FROM observations
-       WHERE parking_position_id = $1 AND deleted_at IS NULL
+       WHERE parking_position_id = ? AND deleted_at IS NULL
        ORDER BY observed_at DESC
-       LIMIT $2`,
-      [positionId, limit]
+       LIMIT ?`
     );
+    const rows = stmt.all(positionId, limit);
 
-    return result.rows.map(this.mapObservationRow);
+    return rows.map((row) => this.mapObservationRow(row as any));
   }
 
   /**
    * Check if observation has specific type of evidence
    */
-  async hasEvidenceType(observationId: string, intent: EvidenceIntent): Promise<boolean> {
-    const result = await this.pool.query(
+  hasEvidenceType(observationId: string, intent: EvidenceIntent): boolean {
+    const stmt = this.db.prepare(
       `SELECT COUNT(*) as count FROM evidence_items
-       WHERE observation_id = $1 AND intent = $2 AND deleted_at IS NULL`,
-      [observationId, intent]
+       WHERE observation_id = ? AND intent = ? AND deleted_at IS NULL`
     );
+    const result = stmt.get(observationId, intent) as any;
 
-    return parseInt(result.rows[0].count) > 0;
+    return parseInt(result.count) > 0;
   }
 
   /**
    * Find or create vehicle record
    */
-  private async findOrCreateVehicle(
-    client: any,
+  private findOrCreateVehicle(
     licensePlate: string,
     issuingState: string,
     observedAt: Date
-  ): Promise<string> {
+  ): string {
     // Try to find existing vehicle
-    const existing = await client.query(
+    const findStmt = this.db.prepare(
       `SELECT * FROM vehicles
-       WHERE license_plate = $1 AND issuing_state = $2 AND deleted_at IS NULL`,
-      [licensePlate, issuingState]
+       WHERE license_plate = ? AND issuing_state = ? AND deleted_at IS NULL`
     );
+    const existing = findStmt.get(licensePlate, issuingState) as any;
 
-    if (existing.rows.length > 0) {
-      const vehicle = existing.rows[0];
-
+    if (existing) {
       // Update last observed time
-      await client.query(
-        'UPDATE vehicles SET last_observed_at = $1 WHERE id = $2',
-        [observedAt, vehicle.id]
+      const updateStmt = this.db.prepare(
+        'UPDATE vehicles SET last_observed_at = ? WHERE id = ?'
       );
+      updateStmt.run(observedAt.toISOString(), existing.id);
 
-      return vehicle.id;
+      return existing.id;
     }
 
     // Create new vehicle
-    const newVehicle = await client.query(
-      `INSERT INTO vehicles (license_plate, issuing_state, last_observed_at)
-       VALUES ($1, $2, $3)
-       RETURNING *`,
-      [licensePlate, issuingState, observedAt]
-    );
+    const vehicleId = uuidv4();
+    const now = new Date().toISOString();
 
-    return newVehicle.rows[0].id;
+    const insertStmt = this.db.prepare(
+      `INSERT INTO vehicles (id, license_plate, issuing_state, last_observed_at, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    );
+    insertStmt.run(vehicleId, licensePlate, issuingState, observedAt.toISOString(), now, now);
+
+    return vehicleId;
   }
 
   private mapObservationRow(row: any): Observation {

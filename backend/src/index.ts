@@ -1,6 +1,6 @@
 import express from 'express';
 import dotenv from 'dotenv';
-import { getPool } from './db';
+import { getDatabase } from './db';
 import { createApiRouter } from './api';
 
 // Load environment variables
@@ -22,10 +22,11 @@ app.use((_req, res, next) => {
 });
 
 // Health check endpoint
-app.get('/health', async (_req, res) => {
+app.get('/health', (_req, res) => {
   try {
-    const pool = getPool();
-    await pool.query('SELECT 1');
+    const db = getDatabase();
+    // Simple health check query
+    db.prepare('SELECT 1').get();
     res.json({ status: 'healthy', database: 'connected' });
   } catch (error) {
     res.status(503).json({ status: 'unhealthy', error: String(error) });
@@ -33,8 +34,8 @@ app.get('/health', async (_req, res) => {
 });
 
 // API routes
-const pool = getPool();
-app.use('/api', createApiRouter(pool));
+const db = getDatabase();
+app.use('/api', createApiRouter(db));
 
 // Root endpoint
 app.get('/', (_req, res) => {
@@ -57,5 +58,5 @@ app.use((err: Error, _req: express.Request, res: express.Response, _next: expres
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
   console.log(`Environment: ${process.env.ENV || 'development'}`);
-  console.log(`Database: ${process.env.DATABASE_URL ? 'Configured' : 'Not configured'}`);
+  console.log(`Database: ${process.env.DATABASE_PATH || 'data/cedar_terrace.db'}`);
 });
