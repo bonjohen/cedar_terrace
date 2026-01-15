@@ -1,23 +1,100 @@
-# Parking Enforcement System – Local Development Environment Setup
-# Run this script from the root of the project folder
+# Parking Enforcement System – Deterministic Local Dev Setup
+# Run from project root
+# Requires: Docker Desktop, Node.js
 
-Write-Host "=== Parking Enforcement Dev Environment Setup ==="
+$ErrorActionPreference = "Stop"
 
-# ---------- 1. Verify prerequisites ----------
-Write-Host "Checking prerequisites..."
+function Section($msg) {
+    Write-Host ""
+    Write-Host "=== $msg ===" -ForegroundColor Cyan
+}
 
-$requiredCommands = @("git", "docker", "node", "npm")
-foreach ($cmd in $requiredCommands) {
+function Success($msg) {
+    Write-Host "[OK] $msg" -ForegroundColor Green
+}
+
+function Fail($msg) {
+    Write-Host "[FAIL] $msg" -ForegroundColor Red
+    exit 1
+}
+
+function Info($msg) {
+    Write-Host "[INFO] $msg" -ForegroundColor Yellow
+}
+
+Section "Environment verification"
+
+$required = @("git", "docker", "node", "npm")
+foreach ($cmd in $required) {
     if (-not (Get-Command $cmd -ErrorAction SilentlyContinue)) {
-        Write-Error "$cmd is not installed or not on PATH. Aborting."
-        exit 1
+        Fail "$cmd is not installed or not on PATH"
+    }
+}
+Success "Required tools present"
+
+Section "Docker diagnostics"
+
+Info "Docker CLI location:"
+(Get-Command docker).Source | Write-Host
+
+Info "Docker CLI version:"
+docker version --format '{{.Client.Version}}'
+
+Info "Docker contexts:"
+docker context ls
+
+Info "Active Docker context:"
+docker context show
+
+Info "WSL status:"
+try { wsl --status } catch { Info "WSL not available" }
+
+Section "Docker engine startup"
+
+$dockerDesktop = "C:\Program Files\Docker\Docker\Docker Desktop.exe"
+if (-not (Test-Path $dockerDesktop)) {
+    Fail "Docker Desktop not found at expected path"
+}
+
+# --- Docker readiness check (warning-tolerant) ---
+$oldEAP = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+
+docker info *> $null
+if ($LASTEXITCODE -ne 0) {
+    Info "Docker engine not reachable, starting Docker Desktop"
+    Start-Process $dockerDesktop
+} else {
+    Success "Docker engine already running"
+}
+
+Info "Waiting for Docker engine (\\.\pipe\docker_engine)"
+
+$engineReady = $false
+$elapsed = 0
+$maxWaitSeconds = 300
+$interval = 5
+
+while (-not $engineReady -and $elapsed -lt $maxWaitSeconds) {
+    Start-Sleep -Seconds $interval
+    $elapsed += $interval
+
+    docker info *> $null
+    if ($LASTEXITCODE -eq 0) {
+        $engineReady = $true
+        Success "Docker engine is ready"
+    } else {
+        Info "Docker engine not ready yet ($elapsed sec)"
     }
 }
 
-Write-Host "Prerequisites OK."
+$ErrorActionPreference = $oldEAP
 
-# ---------- 2. Create folder structure ----------
-Write-Host "Creating project structure..."
+if (-not $engineReady) {
+    Fail "Docker engine did not become ready within $maxWaitSeconds seconds"
+}
+
+Section "Project structure"
 
 $dirs = @(
     "backend",
@@ -26,10 +103,9 @@ $dirs = @(
     "shared",
     "infra",
     "scripts",
-    "local",
-    "local/db",
-    "local/s3",
-    "local/mail"
+    "local\db",
+    "local\s3",
+    "local\mail"
 )
 
 foreach ($dir in $dirs) {
@@ -37,30 +113,26 @@ foreach ($dir in $dirs) {
         New-Item -ItemType Directory -Path $dir | Out-Null
     }
 }
+Success "Directory structure ensured"
 
-# ---------- 3. Create environment files ----------
-Write-Host "Creating environment configuration..."
+Section "Environment configuration"
 
 $envFile = ".env.local"
-if (-not (Test-Path $envFile)) {
 @"
 ENV=local
 DATABASE_URL=postgresql://postgres:postgres@localhost:5432/parking_dev
 S3_ENDPOINT=http://localhost:9000
 S3_BUCKET=parking-evidence
-AUTH_MODE=stub
 EMAIL_MODE=local
+AUTH_MODE=stub
 API_BASE_URL=http://localhost:3000
 "@ | Out-File $envFile -Encoding utf8
-}
+Success ".env.local refreshed"
 
-# ---------- 4. Docker compose for local services ----------
-Write-Host "Creating docker-compose.yml..."
+Section "Local infrastructure (Docker Compose)"
 
-$dockerCompose = "local/docker-compose.yml"
-if (-not (Test-Path $dockerCompose)) {
+$composeFile = "local\docker-compose.yml"
 @"
-version: '3.8'
 services:
   postgres:
     image: postgres:16
@@ -93,68 +165,89 @@ services:
     ports:
       - "1025:1025"
       - "8025:8025"
-"@ | Out-File $dockerCompose -Encoding utf8
+"@ | Out-File $composeFile -Encoding utf8
+
+Push-Location local
+
+$oldEAP = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+
+docker compose down --remove-orphans *> $null
+if ($LASTEXITCODE -ne 0) {
+    $ErrorActionPreference = $oldEAP
+    Fail "docker compose down failed"
 }
 
-# ---------- 5. Start local infrastructure ----------
-Write-Host "Starting local infrastructure (Postgres, S3, Mail)..."
-Push-Location local
-docker compose up -d
+docker compose pull *> $null
+if ($LASTEXITCODE -ne 0) {
+    $ErrorActionPreference = $oldEAP
+    Fail "docker compose pull failed"
+}
+
+docker compose up -d *> $null
+if ($LASTEXITCODE -ne 0) {
+    $ErrorActionPreference = $oldEAP
+    Fail "docker compose up failed"
+}
+
+$ErrorActionPreference = $oldEAP
 Pop-Location
 
-# ---------- 6. Install backend dependencies ----------
-if (Test-Path "backend/package.json") {
-    Write-Host "Installing backend dependencies..."
-    Push-Location backend
-    npm install
-    Pop-Location
+Success "Docker services started"
+
+Section "Database initialization"
+
+$ErrorActionPreference = "Continue"
+
+$pgReady = $false
+$elapsed = 0
+while (-not $pgReady -and $elapsed -lt 60) {
+    docker exec parking-postgres pg_isready -U postgres *> $null
+    if ($LASTEXITCODE -eq 0) {
+        $pgReady = $true
+        break
+    }
+    Start-Sleep -Seconds 2
+    $elapsed += 2
 }
 
-# ---------- 7. Install frontend dependencies ----------
-if (Test-Path "frontend-admin/package.json") {
-    Write-Host "Installing frontend-admin dependencies..."
-    Push-Location frontend-admin
-    npm install
-    Pop-Location
+$ErrorActionPreference = $oldEAP
+
+if (-not $pgReady) {
+    Fail "Postgres did not become ready"
 }
 
-# ---------- 8. Install shared dependencies ----------
-if (Test-Path "shared/package.json") {
-    Write-Host "Installing shared dependencies..."
-    Push-Location shared
-    npm install
-    Pop-Location
-}
-
-# ---------- 9. Initialize database ----------
-Write-Host "Waiting for Postgres to be ready..."
-Start-Sleep -Seconds 5
-
-Write-Host "Initializing database schema..."
-docker exec -i parking-postgres psql `
+docker exec parking-postgres psql `
     -U postgres `
     -d parking_dev `
-    -c "CREATE EXTENSION IF NOT EXISTS pgcrypto;"
+    -c "CREATE EXTENSION IF NOT EXISTS pgcrypto;" *> $null
 
-# ---------- 10. Create S3 bucket ----------
-Write-Host "Creating local S3 bucket..."
-docker exec parking-minio `
-    mc alias set local http://localhost:9000 minio minio123
-docker exec parking-minio `
-    mc mb local/parking-evidence --ignore-existing
+Success "Database ready"
 
-# ---------- 11. Seed development data ----------
-Write-Host "Seeding development data (stub)..."
-Write-Host "NOTE: Implement seed scripts in /scripts/seed.ps1"
+Section "Object storage (MinIO)"
 
-# ---------- 12. Final instructions ----------
-Write-Host ""
-Write-Host "=== Setup Complete ==="
-Write-Host "Next steps:"
-Write-Host "1. Start backend:   cd backend; npm run dev"
-Write-Host "2. Start admin UI:  cd frontend-admin; npm run dev"
-Write-Host "3. Mobile app:      use local API_BASE_URL"
-Write-Host "4. Mail UI:         http://localhost:8025"
-Write-Host "5. MinIO UI:        http://localhost:9001"
-Write-Host ""
-Write-Host "Local environment ready."
+docker exec parking-minio mc alias set local http://localhost:9000 minio minio123 *> $null
+docker exec parking-minio mc mb local/parking-evidence --ignore-existing *> $null
+Success "S3-compatible storage ready"
+
+Section "Node dependencies"
+
+$nodeProjects = @("backend", "frontend-admin", "shared")
+foreach ($proj in $nodeProjects) {
+    if (Test-Path "$proj\package.json") {
+        Push-Location $proj
+        npm install
+        Pop-Location
+        Success "$proj dependencies installed"
+    }
+}
+
+Section "Setup complete"
+
+Write-Host "Local environment is READY" -ForegroundColor Green
+Write-Host "Postgres : localhost:5432"
+Write-Host "MinIO    : http://localhost:9001"
+Write-Host "MailHog  : http://localhost:8025"
+Write-Host "Next:"
+Write-Host " cd backend        ; npm run dev"
+Write-Host " cd frontend-admin ; npm run dev"
