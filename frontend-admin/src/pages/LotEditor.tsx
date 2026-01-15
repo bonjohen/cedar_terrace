@@ -1,6 +1,8 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { parkingPositionsApi } from '../api/client';
 import { useAppStore } from '../store/app-store';
+import { ConfirmDialog } from '../components/ConfirmDialog';
+import { validateForm, validators } from '../utils/validation';
 
 interface Position {
   id: string;
@@ -39,6 +41,8 @@ export function LotEditor() {
     rentalInfo: '',
   });
   const [submitting, setSubmitting] = useState(false);
+  const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
@@ -185,6 +189,24 @@ export function LotEditor() {
     e.preventDefault();
     if (!currentSiteId || !currentLotImageId) return;
 
+    // Validate form data
+    const validation = validateForm(formData, {
+      identifier: { required: true, minLength: 1, maxLength: 50 },
+      centerX: validators.coordinateX,
+      centerY: validators.coordinateY,
+      radius: validators.radius,
+      rentalInfo:
+        formData.type === 'PURCHASED' || formData.type === 'RESERVED'
+          ? { required: true, minLength: 1 }
+          : undefined,
+    });
+
+    if (!validation.isValid) {
+      setValidationErrors(validation.errors);
+      return;
+    }
+
+    setValidationErrors({});
     setSubmitting(true);
     try {
       const payload = {
@@ -215,9 +237,14 @@ export function LotEditor() {
     }
   };
 
-  const handleDelete = async () => {
+  const handleDeleteClick = () => {
     if (!selectedPosition) return;
-    if (!confirm('Are you sure you want to delete this position?')) return;
+    setShowDeleteConfirm(true);
+  };
+
+  const handleDeleteConfirm = async () => {
+    if (!selectedPosition) return;
+    setShowDeleteConfirm(false);
 
     setSubmitting(true);
     try {
@@ -340,7 +367,7 @@ export function LotEditor() {
                     Edit Position
                   </button>
                   <button
-                    onClick={handleDelete}
+                    onClick={handleDeleteClick}
                     disabled={submitting}
                     className="w-full bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700 disabled:opacity-50"
                   >
@@ -408,15 +435,22 @@ export function LotEditor() {
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Identifier
+                  Identifier *
                 </label>
                 <input
                   type="text"
                   value={formData.identifier}
                   onChange={(e) => setFormData({ ...formData, identifier: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 ${
+                    validationErrors.identifier
+                      ? 'border-red-500 focus:ring-red-500'
+                      : 'border-gray-300 focus:ring-blue-500'
+                  }`}
                   placeholder="e.g., H1, 3, P5"
                 />
+                {validationErrors.identifier && (
+                  <p className="mt-1 text-sm text-red-600">{validationErrors.identifier}</p>
+                )}
               </div>
 
               <div className="grid grid-cols-2 gap-4">
@@ -501,6 +535,18 @@ export function LotEditor() {
           </div>
         </div>
       )}
+
+      {/* Delete Confirmation Dialog */}
+      <ConfirmDialog
+        isOpen={showDeleteConfirm}
+        title="Delete Parking Position"
+        message={`Are you sure you want to delete this parking position? This action cannot be undone.`}
+        confirmLabel="Delete"
+        cancelLabel="Cancel"
+        confirmVariant="danger"
+        onConfirm={handleDeleteConfirm}
+        onCancel={() => setShowDeleteConfirm(false)}
+      />
     </div>
   );
 }
