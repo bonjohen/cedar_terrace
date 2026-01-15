@@ -21,9 +21,10 @@ Quick start guide for local development.
 This will:
 - Verify required tools
 - Start Docker Desktop if needed
-- Create local infrastructure (PostgreSQL, MinIO, MailHog)
+- Create local infrastructure (MinIO, MailHog)
 - Install npm dependencies for all packages
 - Create `.env.local` configuration
+- Create `data/` directory for SQLite database
 
 ### 2. Run Database Migrations
 
@@ -32,7 +33,7 @@ cd backend
 npm run migrate
 ```
 
-This creates all database tables and indexes.
+This creates the SQLite database file (`data/cedar_terrace.db`) with all tables and indexes.
 
 ### 3. Seed Test Data
 
@@ -81,7 +82,7 @@ After running `setup.ps1`:
 |---------|-----|-------------|
 | Backend API | http://localhost:3000 | - |
 | Admin UI | http://localhost:3001 | - |
-| PostgreSQL | localhost:5432 | postgres / postgres |
+| SQLite Database | `backend/data/cedar_terrace.db` | (file-based) |
 | MinIO Console | http://localhost:9001 | minio / minio123 |
 | MailHog | http://localhost:8025 | - |
 
@@ -206,16 +207,18 @@ See `docs/test-parking-lot.svg` for a visual diagram.
 .\setup.ps1
 ```
 
-### Database Connection Error
+### Database File Issues
 ```bash
-# Check if PostgreSQL container is running
-docker ps
+# Check if database file exists
+ls backend/data/cedar_terrace.db
 
-# Check PostgreSQL logs
-docker logs parking-postgres
+# If missing or corrupted, recreate it
+cd backend
+npm run migrate
 
-# Restart container
-docker restart parking-postgres
+# Reset database (clean slate)
+rm data/cedar_terrace.db data/cedar_terrace.db-*
+npm run db:reset
 ```
 
 ### Port Already in Use

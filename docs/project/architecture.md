@@ -32,9 +32,22 @@ Scheduled execution is implemented using EventBridge rules that periodically enq
 
 ## 6. Data Storage
 
-The system-of-record is PostgreSQL hosted on Amazon Aurora Serverless v2. It stores all domain entities including site configuration, lot images, parking positions, vehicles, observations, violations, timeline events, notices, recipient accounts, and access logs. Soft delete fields are present on all relevant tables, and normal queries exclude soft-deleted records.
+The system-of-record for local development is SQLite with a single-user, file-based database. For production AWS deployment, the system uses PostgreSQL hosted on Amazon Aurora Serverless v2. Both database implementations store all domain entities including site configuration, lot images, parking positions, vehicles, observations, violations, timeline events, notices, recipient accounts, and access logs. Soft delete fields are present on all relevant tables, and normal queries exclude soft-deleted records.
 
-Evidence images are stored in S3 as immutable objects. Observations store S3 object keys, hashes, timestamps, and related metadata. The system does not store rendered sticker images. Notices store the structured text payload and a QR token reference used to resolve the secured ticket page.
+**Local Development (SQLite):**
+- File-based storage: `data/cedar_terrace.db`
+- WAL mode enabled for better concurrency
+- Synchronous API (better-sqlite3)
+- No external database service required
+- Ideal for single-user, cost-sensitive deployments
+
+**Production (PostgreSQL/Aurora):**
+- Aurora Serverless v2 for managed scaling
+- Asynchronous connection pooling
+- Multi-user concurrent access
+- Automated backups and replication
+
+Evidence images are stored in S3 as immutable objects (or local MinIO for development). Observations store S3 object keys, hashes, timestamps, and related metadata. The system does not store rendered sticker images. Notices store the structured text payload and a QR token reference used to resolve the secured ticket page.
 
 ## 7. Authentication and Authorization
 
@@ -52,11 +65,11 @@ Operational telemetry is captured using CloudWatch logs, metrics, and alarms. Th
 
 ## 10. Development Tooling
 
-Development is organized as a monorepo or tightly coordinated multi-repo with shared domain models and DTOs. TypeScript is used across frontend and backend or combined with Python in backend workers if desired, but the domain model and invariants remain consistent regardless of language. Local development uses containerized PostgreSQL and local environment emulation for serverless handlers. Developers run the Admin UI and ticket portal locally against a local API and database, using stubbed integrations for email and storage when appropriate.
+Development is organized as a monorepo or tightly coordinated multi-repo with shared domain models and DTOs. TypeScript is used across frontend and backend or combined with Python in backend workers if desired, but the domain model and invariants remain consistent regardless of language. Local development uses SQLite for the database (no Docker required) and local MinIO for S3-compatible storage emulation. Developers run the Admin UI and ticket portal locally against a local API and database, using MailHog for email testing and stubbed integrations when appropriate.
 
 ## 11. Testing Infrastructure
 
-Unit tests cover domain logic such as violation derivation, timeline transitions, idempotency, evidence requirements, and soft delete behavior. Integration tests validate end-to-end flows including offline capture ingestion, evidence upload and metadata submission, notice issuance, recipient activation and profile gating, and secured ticket retrieval. Contract tests validate request and response shapes for API endpoints used by clients. Test environments are deployed via infrastructure-as-code and seeded with fixture data for repeatability.
+Unit tests cover domain logic such as violation derivation, timeline transitions, idempotency, evidence requirements, and soft delete behavior. Tests use in-memory SQLite databases (`:memory:`) for fast, isolated execution without external dependencies. Integration tests validate end-to-end flows including offline capture ingestion, evidence upload and metadata submission, notice issuance, recipient activation and profile gating, and secured ticket retrieval. Contract tests validate request and response shapes for API endpoints used by clients. Test environments are deployed via infrastructure-as-code and seeded with fixture data for repeatability.
 
 ## 12. Deployment Pipeline and Environments
 

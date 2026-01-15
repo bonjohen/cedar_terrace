@@ -1,0 +1,2 @@
+# This directory stores the SQLite database file
+# Database files (*.db, *.db-wal, *.db-shm) are excluded from git

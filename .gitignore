@@ -8,7 +8,10 @@
 local/db/
 local/s3/
 local/mail/
-local/docker-compose.yml
+
+# SQLite database files (but keep the directory)
+backend/data/*.db
+backend/data/*.db-*
 
 # Temporary files
 tmpclaude-*
