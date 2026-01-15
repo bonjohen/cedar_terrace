@@ -26,7 +26,12 @@
       "Bash(python simple-fix.py:*)",
       "Bash(npx create-expo-app@latest:*)",
       "Bash(npx expo install:*)",
-      "Bash(git reset:*)"
+      "Bash(git reset:*)",
+      "Bash(timeout 5 npm run dev:*)",
+      "Bash(npm run dev:*)",
+      "Bash(netstat:*)",
+      "Bash(findstr:*)",
+      "Bash(taskkill //F //PID 7628)"
     ]
   }
 }
