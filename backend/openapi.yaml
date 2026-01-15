@@ -1,0 +1,822 @@
+openapi: 3.0.3
+info:
+  title: Cedar Terrace Parking Enforcement API
+  description: |
+    REST API for the Cedar Terrace parking enforcement and stall management system.
+
+    ## Features
+    - Parking position management with circle geometry
+    - Observation submission with photo and text evidence
+    - Automatic violation derivation and timeline progression
+    - Notice issuance with QR codes
+    - Recipient ticket portal access
+
+    ## Core Invariants
+    - Observations are immutable once submitted
+    - Violations are event-driven state machines
+    - All operations use soft deletes
+    - Idempotency required for observations and notices
+    - QR codes are pointers only, not access grants
+
+    ## Authentication
+    - Local development: AUTH_MODE=stub (no authentication required)
+    - Production: AUTH_MODE=cognito (AWS Cognito JWT tokens)
+  version: 1.0.0
+  contact:
+    name: Cedar Terrace Development Team
+  license:
+    name: Private
+
+servers:
+  - url: http://localhost:3000
+    description: Local development
+  - url: https://api.cedarterrace.com
+    description: Production
+
+tags:
+  - name: Health
+    description: Service health and status
+  - name: Parking Positions
+    description: Parking position CRUD and spatial queries
+  - name: Observations
+    description: Field enforcement observations with evidence
+  - name: Violations
+    description: Violation management and timeline evaluation
+  - name: Notices
+    description: Notice issuance and retrieval
+  - name: Recipients
+    description: Ticket recipient portal access
+  - name: Storage
+    description: S3 pre-signed URL generation
+
+paths:
+  /health:
+    get:
+      tags: [Health]
+      summary: Health check
+      description: Returns service health status and version
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  version:
+                    type: string
+                    example: 1.0.0
+
+  /api/v1/parking-positions/site/{siteId}:
+    get:
+      tags: [Parking Positions]
+      summary: List positions for site
+      description: Get all parking positions for a specific site
+      parameters:
+        - name: siteId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: List of parking positions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ParkingPosition'
+
+  /api/v1/parking-positions:
+    post:
+      tags: [Parking Positions]
+      summary: Create parking position
+      description: Create a new parking position with circle geometry
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreatePositionRequest'
+      responses:
+        '201':
+          description: Position created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ParkingPosition'
+
+  /api/v1/parking-positions/{id}:
+    get:
+      tags: [Parking Positions]
+      summary: Get position by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Parking position details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ParkingPosition'
+
+    put:
+      tags: [Parking Positions]
+      summary: Update parking position
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdatePositionRequest'
+      responses:
+        '200':
+          description: Position updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ParkingPosition'
+
+    delete:
+      tags: [Parking Positions]
+      summary: Delete parking position (soft delete)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '204':
+          description: Position deleted
+
+  /api/v1/parking-positions/find-at-point:
+    post:
+      tags: [Parking Positions]
+      summary: Find position at coordinates
+      description: Find parking position containing a specific point
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [lotImageId, x, y]
+              properties:
+                lotImageId:
+                  type: string
+                  format: uuid
+                x:
+                  type: number
+                y:
+                  type: number
+      responses:
+        '200':
+          description: Position found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ParkingPosition'
+        '404':
+          description: No position at coordinates
+
+  /api/v1/observations/submit:
+    post:
+      tags: [Observations]
+      summary: Submit observation (idempotent)
+      description: |
+        Submit a field enforcement observation with evidence.
+        Idempotent - same idempotencyKey returns same result.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubmitObservationRequest'
+      responses:
+        '200':
+          description: Observation submitted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubmitObservationResponse'
+        '409':
+          description: Observation already exists (idempotency)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubmitObservationResponse'
+
+  /api/v1/observations/{id}:
+    get:
+      tags: [Observations]
+      summary: Get observation by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Observation details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Observation'
+
+  /api/v1/violations/{id}:
+    get:
+      tags: [Violations]
+      summary: Get violation by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Violation details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Violation'
+
+  /api/v1/violations/{id}/events:
+    get:
+      tags: [Violations]
+      summary: Get violation timeline events
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: List of timeline events
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ViolationEvent'
+
+  /api/v1/violations/{id}/evaluate-timeline:
+    post:
+      tags: [Violations]
+      summary: Evaluate violation timeline
+      description: Manually trigger timeline evaluation for state transitions
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Timeline evaluated
+
+  /api/v1/notices/issue:
+    post:
+      tags: [Notices]
+      summary: Issue notice (idempotent)
+      description: |
+        Issue a parking notice for a violation.
+        Generates QR token for recipient access.
+        Idempotent - same idempotencyKey returns same result.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [idempotencyKey, violationId]
+              properties:
+                idempotencyKey:
+                  type: string
+                violationId:
+                  type: string
+                  format: uuid
+      responses:
+        '200':
+          description: Notice issued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Notice'
+
+  /api/v1/notices/{id}:
+    get:
+      tags: [Notices]
+      summary: Get notice by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Notice details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Notice'
+
+  /api/v1/recipients/initiate-access:
+    post:
+      tags: [Recipients]
+      summary: Initiate ticket access
+      description: |
+        Start the recipient access flow by email.
+        Sends activation email with 24-hour token.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [qrToken, email]
+              properties:
+                qrToken:
+                  type: string
+                email:
+                  type: string
+                  format: email
+      responses:
+        '200':
+          description: Activation email sent
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Activation email sent
+
+  /api/v1/recipients/activate:
+    post:
+      tags: [Recipients]
+      summary: Activate account
+      description: Activate account using emailed activation token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [activationToken]
+              properties:
+                activationToken:
+                  type: string
+      responses:
+        '200':
+          description: Account activated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sessionToken:
+                    type: string
+                  recipientId:
+                    type: string
+                    format: uuid
+
+  /api/v1/recipients/complete-profile:
+    post:
+      tags: [Recipients]
+      summary: Complete recipient profile
+      description: Add required profile information before ticket access
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sessionToken, fullName, phoneNumber]
+              properties:
+                sessionToken:
+                  type: string
+                fullName:
+                  type: string
+                phoneNumber:
+                  type: string
+      responses:
+        '200':
+          description: Profile completed
+
+  /api/v1/recipients/ticket-details:
+    post:
+      tags: [Recipients]
+      summary: Get ticket details
+      description: View ticket violation details (requires completed profile)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sessionToken, qrToken]
+              properties:
+                sessionToken:
+                  type: string
+                qrToken:
+                  type: string
+      responses:
+        '200':
+          description: Ticket details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TicketDetails'
+
+  /api/v1/storage/upload-url:
+    get:
+      tags: [Storage]
+      summary: Get S3 upload URL
+      description: Get pre-signed S3 URL for photo upload
+      parameters:
+        - name: key
+          in: query
+          required: true
+          schema:
+            type: string
+          example: evidence/photo-001.jpg
+      responses:
+        '200':
+          description: Pre-signed upload URL
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  uploadUrl:
+                    type: string
+                    format: uri
+                  key:
+                    type: string
+
+  /api/v1/storage/download-url:
+    get:
+      tags: [Storage]
+      summary: Get S3 download URL
+      description: Get pre-signed S3 URL for evidence viewing
+      parameters:
+        - name: key
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Pre-signed download URL
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  downloadUrl:
+                    type: string
+                    format: uri
+
+components:
+  schemas:
+    ParkingPosition:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        siteId:
+          type: string
+          format: uuid
+        lotImageId:
+          type: string
+          format: uuid
+        type:
+          type: string
+          enum: [HANDICAPPED, OPEN, PURCHASED, RESERVED]
+        centerX:
+          type: number
+          description: X coordinate of circle center
+        centerY:
+          type: number
+          description: Y coordinate of circle center
+        radius:
+          type: number
+          description: Circle radius in pixels
+        identifier:
+          type: string
+          example: "H1"
+        rentalInfo:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    CreatePositionRequest:
+      type: object
+      required: [siteId, lotImageId, type, centerX, centerY, radius]
+      properties:
+        siteId:
+          type: string
+          format: uuid
+        lotImageId:
+          type: string
+          format: uuid
+        type:
+          type: string
+          enum: [HANDICAPPED, OPEN, PURCHASED, RESERVED]
+        centerX:
+          type: number
+        centerY:
+          type: number
+        radius:
+          type: number
+        identifier:
+          type: string
+        rentalInfo:
+          type: string
+
+    UpdatePositionRequest:
+      type: object
+      required: [siteId, lotImageId, type, centerX, centerY, radius]
+      properties:
+        siteId:
+          type: string
+          format: uuid
+        lotImageId:
+          type: string
+          format: uuid
+        type:
+          type: string
+          enum: [HANDICAPPED, OPEN, PURCHASED, RESERVED]
+        centerX:
+          type: number
+        centerY:
+          type: number
+        radius:
+          type: number
+        identifier:
+          type: string
+        rentalInfo:
+          type: string
+
+    Observation:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        siteId:
+          type: string
+          format: uuid
+        observedAt:
+          type: string
+          format: date-time
+        licensePlate:
+          type: string
+        issuingState:
+          type: string
+        parkingPositionId:
+          type: string
+          format: uuid
+          nullable: true
+        submittedBy:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+
+    SubmitObservationRequest:
+      type: object
+      required: [idempotencyKey, siteId, observedAt, evidence]
+      properties:
+        idempotencyKey:
+          type: string
+          description: Unique key for idempotency
+        siteId:
+          type: string
+          format: uuid
+        observedAt:
+          type: string
+          format: date-time
+        licensePlate:
+          type: string
+        issuingState:
+          type: string
+        registrationMonth:
+          type: integer
+          minimum: 1
+          maximum: 12
+        registrationYear:
+          type: integer
+        parkingPositionId:
+          type: string
+          format: uuid
+        locationDescription:
+          type: string
+        evidence:
+          type: array
+          minItems: 1
+          items:
+            oneOf:
+              - $ref: '#/components/schemas/PhotoEvidence'
+              - $ref: '#/components/schemas/TextNoteEvidence'
+
+    PhotoEvidence:
+      type: object
+      required: [type, s3Key]
+      properties:
+        type:
+          type: string
+          enum: [PHOTO]
+        s3Key:
+          type: string
+        intent:
+          type: string
+          enum: [PRIMARY_VEHICLE, SECONDARY_VEHICLE, REGISTRATION_UPDATE, HANDICAPPED_PLACARD, GENERAL]
+        capturedAt:
+          type: string
+          format: date-time
+
+    TextNoteEvidence:
+      type: object
+      required: [type, noteText]
+      properties:
+        type:
+          type: string
+          enum: [TEXT_NOTE]
+        noteText:
+          type: string
+        intent:
+          type: string
+
+    SubmitObservationResponse:
+      type: object
+      properties:
+        observationId:
+          type: string
+          format: uuid
+        violationIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+
+    Violation:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        category:
+          type: string
+          enum: [HANDICAPPED_NO_PERMIT, PURCHASED_UNAUTHORIZED, FIRE_LANE, REGISTRATION_EXPIRED, GENERAL_VIOLATION]
+        status:
+          type: string
+          enum: [DETECTED, NOTICE_ISSUED, ESCALATED, TOW_ELIGIBLE, RESOLVED]
+        vehicleId:
+          type: string
+          format: uuid
+        siteId:
+          type: string
+          format: uuid
+        parkingPositionId:
+          type: string
+          format: uuid
+          nullable: true
+        detectedAt:
+          type: string
+          format: date-time
+        noticeIssuedAt:
+          type: string
+          format: date-time
+          nullable: true
+        resolvedAt:
+          type: string
+          format: date-time
+          nullable: true
+
+    ViolationEvent:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        violationId:
+          type: string
+          format: uuid
+        eventType:
+          type: string
+          enum: [DETECTED, NOTICE_ISSUED, ESCALATED, TOW_ELIGIBLE, RESOLVED]
+        occurredAt:
+          type: string
+          format: date-time
+        eventData:
+          type: object
+          additionalProperties: true
+
+    Notice:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        violationId:
+          type: string
+          format: uuid
+        qrToken:
+          type: string
+        issuedAt:
+          type: string
+          format: date-time
+        printedAt:
+          type: string
+          format: date-time
+          nullable: true
+
+    TicketDetails:
+      type: object
+      properties:
+        violation:
+          $ref: '#/components/schemas/Violation'
+        vehicle:
+          type: object
+          properties:
+            licensePlate:
+              type: string
+            issuingState:
+              type: string
+        notice:
+          type: object
+          properties:
+            issuedAt:
+              type: string
+              format: date-time
+            deadlines:
+              type: object
+              properties:
+                payment:
+                  type: string
+                  format: date-time
+                appeal:
+                  type: string
+                  format: date-time
+                towEligible:
+                  type: string
+                  format: date-time
+        evidence:
+          type: array
+          items:
+            type: object
+            properties:
+              type:
+                type: string
+                enum: [PHOTO, TEXT_NOTE]
+              downloadUrl:
+                type: string
+                format: uri
+              noteText:
+                type: string
+
+  securitySchemes:
+    CognitoAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: AWS Cognito JWT token (production only)
+
+security:
+  - CognitoAuth: []
