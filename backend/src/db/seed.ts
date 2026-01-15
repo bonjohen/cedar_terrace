@@ -1,4 +1,3 @@
-import { Pool } from 'pg';
 import { getPool } from './connection';
 
 interface SeedData {

@@ -49,6 +49,9 @@ export function Layout() {
               <NavLink to="/positions" icon="🅿️">
                 Parking Positions
               </NavLink>
+              <NavLink to="/lot-editor" icon="🗺️">
+                Lot Editor
+              </NavLink>
               <NavLink to="/observations" icon="📷">
                 Observations
               </NavLink>

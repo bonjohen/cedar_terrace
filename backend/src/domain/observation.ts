@@ -2,12 +2,10 @@ import { Pool } from 'pg';
 import {
   Observation,
   EvidenceItem,
-  Vehicle,
   SubmitObservationRequest,
   SubmitObservationResponse,
   EvidenceIntent,
 } from '@cedar-terrace/shared';
-import { v4 as uuidv4 } from 'uuid';
 
 export class ObservationService {
   constructor(private pool: Pool) {}
@@ -38,7 +36,7 @@ export class ObservationService {
         // Return existing observation (idempotent)
         return {
           observationId: existing.id,
-          vehicleId: existing.vehicle_id || undefined,
+          vehicleId: (existing as any).vehicle_id || undefined,
           violationIds: [], // Would need to query violations
           created: false,
         };
@@ -184,7 +182,7 @@ export class ObservationService {
     observedAt: Date
   ): Promise<string> {
     // Try to find existing vehicle
-    const existing = await client.query<Vehicle>(
+    const existing = await client.query(
       `SELECT * FROM vehicles
        WHERE license_plate = $1 AND issuing_state = $2 AND deleted_at IS NULL`,
       [licensePlate, issuingState]
@@ -203,7 +201,7 @@ export class ObservationService {
     }
 
     // Create new vehicle
-    const newVehicle = await client.query<Vehicle>(
+    const newVehicle = await client.query(
       `INSERT INTO vehicles (license_plate, issuing_state, last_observed_at)
        VALUES ($1, $2, $3)
        RETURNING *`,

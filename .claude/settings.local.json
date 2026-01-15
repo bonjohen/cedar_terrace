@@ -5,7 +5,28 @@
       "Bash(git commit:*)",
       "Bash(npm test)",
       "Bash(npm install)",
-      "Bash(npm run build:*)"
+      "Bash(npm run build:*)",
+      "Bash(npm run migrate:*)",
+      "Bash(docker exec:*)",
+      "Bash(node -r dotenv/config -e:*)",
+      "Bash(ls:*)",
+      "Bash(npm test:*)",
+      "Bash(grep:*)",
+      "Bash(for:*)",
+      "Bash(do sed -i 's/observationService\\\\.submit\\({$/observationService.submit\\({\\\\n        siteId: context.siteId,/g' \"$file\")",
+      "Bash(done)",
+      "Bash(python fix-tests.py:*)",
+      "Bash(timeout 60 npm test -- --testPathPattern=\"parking-position\")",
+      "Bash(python fix-vehicle-fields.py:*)",
+      "Bash(python add-submitted-by.py:*)",
+      "Bash(timeout 60 npm test -- --testPathPattern=\"observation-flow\")",
+      "Bash(python add-derivations-v2.py:*)",
+      "Bash(python fix-duplicate-obs.py:*)",
+      "Bash(python fix-submit-response.py:*)",
+      "Bash(python simple-fix.py:*)",
+      "Bash(npx create-expo-app@latest:*)",
+      "Bash(npx expo install:*)",
+      "Bash(git reset:*)"
     ]
   }
 }

@@ -8,7 +8,8 @@
     "frontend-admin",
     "frontend-recipient",
     "mobile",
-    "shared"
+    "shared",
+    "workers"
   ],
   "scripts": {
     "setup": "pwsh ./setup.ps1",

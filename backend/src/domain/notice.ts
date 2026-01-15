@@ -48,8 +48,8 @@ export class NoticeService {
 
         return {
           noticeId: existing.id,
-          qrToken: existing.qr_token,
-          textPayload: existing.text_payload,
+          qrToken: (existing as any).qr_token,
+          textPayload: (existing as any).text_payload,
           created: false,
         };
       }

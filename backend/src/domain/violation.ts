@@ -196,7 +196,7 @@ export class ViolationService {
       if (!rule) continue;
 
       const hoursSinceDetection =
-        (Date.now() - new Date(violation.detected_at).getTime()) / (1000 * 60 * 60);
+        (Date.now() - new Date((violation as any).detected_at).getTime()) / (1000 * 60 * 60);
 
       // Check for state transitions
       if (
@@ -303,7 +303,7 @@ export class ViolationService {
     }
 
     // Create new violation
-    const violation = await client.query<Violation>(
+    const violation = await client.query(
       `INSERT INTO violations (
         site_id, vehicle_id, parking_position_id, category, detected_at
       ) VALUES ($1, $2, $3, $4, $5)
@@ -364,7 +364,7 @@ export class ViolationService {
     }
 
     // Create violation (may be resolved when placard evidence is found)
-    const violation = await client.query<Violation>(
+    const violation = await client.query(
       `INSERT INTO violations (
         site_id, vehicle_id, parking_position_id, category, detected_at
       ) VALUES ($1, $2, $3, $4, $5)
@@ -430,7 +430,7 @@ export class ViolationService {
       return existing.rows[0].id;
     }
 
-    const violation = await client.query<Violation>(
+    const violation = await client.query(
       `INSERT INTO violations (
         site_id, vehicle_id, parking_position_id, category, detected_at
       ) VALUES ($1, $2, $3, $4, $5)

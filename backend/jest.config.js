@@ -7,6 +7,7 @@ module.exports = {
   moduleNameMapper: {
     '^@cedar-terrace/shared$': '<rootDir>/../shared/src',
   },
+  setupFilesAfterEnv: ['<rootDir>/jest.setup.js'],
   transform: {
     '^.+\\.ts$': [
       'ts-jest',

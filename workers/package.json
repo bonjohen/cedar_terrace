@@ -1,0 +1,33 @@
+{
+  "name": "@cedar-terrace/workers",
+  "version": "1.0.0",
+  "description": "Background worker services for Cedar Terrace",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
+    "timeline": "ts-node src/timeline/handler.ts",
+    "email": "ts-node src/email/handler.ts",
+    "ingestion": "ts-node src/ingestion/handler.ts",
+    "test": "jest",
+    "lint": "eslint . --ext .ts"
+  },
+  "dependencies": {
+    "@cedar-terrace/shared": "*",
+    "@aws-sdk/client-sqs": "^3.515.0",
+    "@aws-sdk/client-ses": "^3.515.0",
+    "pg": "^8.11.3",
+    "dotenv": "^16.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/pg": "^8.11.0",
+    "ts-node": "^10.9.2",
+    "ts-node-dev": "^2.0.0",
+    "typescript": "^5.3.3",
+    "jest": "^29.7.0",
+    "@types/jest": "^29.5.11"
+  },
+  "private": true
+}
