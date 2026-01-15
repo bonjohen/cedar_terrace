@@ -1,29 +1,43 @@
-import { Pool, PoolConfig } from 'pg';
+import Database from 'better-sqlite3';
+import path from 'path';
+import fs from 'fs';
 
-let pool: Pool | null = null;
+let db: Database.Database | null = null;
 
-export function getPool(): Pool {
-  if (!pool) {
-    const config: PoolConfig = {
-      connectionString: process.env.DATABASE_URL,
-      max: 20,
-      idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 2000,
-    };
+export function getDatabase(): Database.Database {
+  if (!db) {
+    const dbPath = process.env.DATABASE_PATH || path.join(process.cwd(), 'data', 'cedar_terrace.db');
 
-    pool = new Pool(config);
+    // Ensure the data directory exists
+    const dbDir = path.dirname(dbPath);
+    if (!fs.existsSync(dbDir)) {
+      fs.mkdirSync(dbDir, { recursive: true });
+    }
 
-    pool.on('error', (err) => {
-      console.error('Unexpected database error:', err);
-    });
+    db = new Database(dbPath);
+
+    // Enable foreign keys
+    db.pragma('foreign_keys = ON');
+
+    // Set WAL mode for better concurrency
+    db.pragma('journal_mode = WAL');
+
+    // Set synchronous mode for better performance
+    db.pragma('synchronous = NORMAL');
   }
 
-  return pool;
+  return db;
 }
 
-export async function closePool(): Promise<void> {
-  if (pool) {
-    await pool.end();
-    pool = null;
+export function closeDatabase(): void {
+  if (db) {
+    db.close();
+    db = null;
   }
+}
+
+export function executeTransaction<T>(fn: (db: Database.Database) => T): T {
+  const database = getDatabase();
+  const transaction = database.transaction(fn);
+  return transaction(database);
 }

@@ -1,52 +1,46 @@
-import { Pool } from 'pg';
+import Database from 'better-sqlite3';
 import { readFileSync, readdirSync } from 'fs';
 import { join } from 'path';
 
 export class Migrator {
-  constructor(private pool: Pool) {}
+  constructor(private db: Database.Database) {}
 
-  async init() {
-    await this.pool.query(`
+  init() {
+    this.db.exec(`
       CREATE TABLE IF NOT EXISTS schema_migrations (
-        id SERIAL PRIMARY KEY,
-        version VARCHAR(255) NOT NULL UNIQUE,
-        applied_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        version TEXT NOT NULL UNIQUE,
+        applied_at TEXT NOT NULL DEFAULT (datetime('now'))
       )
     `);
   }
 
-  async getAppliedMigrations(): Promise<string[]> {
-    const result = await this.pool.query<{ version: string }>(
-      'SELECT version FROM schema_migrations ORDER BY version'
-    );
-    return result.rows.map((row) => row.version);
+  getAppliedMigrations(): string[] {
+    const stmt = this.db.prepare('SELECT version FROM schema_migrations ORDER BY version');
+    const rows = stmt.all() as Array<{ version: string }>;
+    return rows.map((row) => row.version);
   }
 
-  async applyMigration(version: string, sql: string) {
-    const client = await this.pool.connect();
-    try {
-      await client.query('BEGIN');
-      await client.query(sql);
-      await client.query('INSERT INTO schema_migrations (version) VALUES ($1)', [version]);
-      await client.query('COMMIT');
+  applyMigration(version: string, sql: string) {
+    const transaction = this.db.transaction(() => {
+      this.db.exec(sql);
+      const stmt = this.db.prepare('INSERT INTO schema_migrations (version) VALUES (?)');
+      stmt.run(version);
       console.log(`Applied migration: ${version}`);
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
-    }
+    });
+
+    transaction();
   }
 
-  async migrate() {
-    await this.init();
+  migrate() {
+    this.init();
 
     const migrationsDir = join(__dirname, 'migrations');
     const migrationFiles = readdirSync(migrationsDir)
       .filter((f) => f.endsWith('.sql'))
       .sort();
 
-    const applied = await this.getAppliedMigrations();
+    const applied = this.getAppliedMigrations();
 
     for (const file of migrationFiles) {
       const version = file.replace('.sql', '');
@@ -56,7 +50,7 @@ export class Migrator {
       }
 
       const sql = readFileSync(join(migrationsDir, file), 'utf-8');
-      await this.applyMigration(version, sql);
+      this.applyMigration(version, sql);
     }
 
     console.log('All migrations applied successfully');

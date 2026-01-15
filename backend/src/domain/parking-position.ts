@@ -1,4 +1,5 @@
-import { Pool } from 'pg';
+import Database from 'better-sqlite3';
+import { v4 as uuidv4 } from 'uuid';
 import {
   ParkingPosition,
   ParkingPositionType,
@@ -7,62 +8,67 @@ import {
 } from '@cedar-terrace/shared';
 
 export class ParkingPositionService {
-  constructor(private pool: Pool) {}
+  constructor(private db: Database.Database) {}
 
-  async create(request: CreateParkingPositionRequest): Promise<ParkingPosition> {
-    const result = await this.pool.query<ParkingPosition>(
+  create(request: CreateParkingPositionRequest): ParkingPosition {
+    const id = uuidv4();
+    const now = new Date().toISOString();
+
+    const stmt = this.db.prepare(
       `INSERT INTO parking_positions (
-        site_id, lot_image_id, type, center_x, center_y, radius,
-        identifier, rental_info, assigned_vehicle_id
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-      RETURNING *`,
-      [
-        request.siteId,
-        request.lotImageId,
-        request.type,
-        request.centerX,
-        request.centerY,
-        request.radius,
-        request.identifier || null,
-        request.rentalInfo || null,
-        request.assignedVehicleId || null,
-      ]
+        id, site_id, lot_image_id, type, center_x, center_y, radius,
+        identifier, rental_info, assigned_vehicle_id, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     );
 
-    return this.mapRow(result.rows[0]);
+    stmt.run(
+      id,
+      request.siteId,
+      request.lotImageId,
+      request.type,
+      request.centerX,
+      request.centerY,
+      request.radius,
+      request.identifier || null,
+      request.rentalInfo || null,
+      request.assignedVehicleId || null,
+      now,
+      now
+    );
+
+    return this.getById(id);
   }
 
-  async update(id: string, request: UpdateParkingPositionRequest): Promise<ParkingPosition> {
+  update(id: string, request: UpdateParkingPositionRequest): ParkingPosition {
     const updates: string[] = [];
     const values: unknown[] = [];
-    let paramIndex = 1;
 
     if (request.centerX !== undefined) {
-      updates.push(`center_x = $${paramIndex++}`);
+      updates.push(`center_x = ?`);
       values.push(request.centerX);
     }
     if (request.centerY !== undefined) {
-      updates.push(`center_y = $${paramIndex++}`);
+      updates.push(`center_y = ?`);
       values.push(request.centerY);
     }
     if (request.radius !== undefined) {
-      updates.push(`radius = $${paramIndex++}`);
+      updates.push(`radius = ?`);
       values.push(request.radius);
     }
     if (request.type !== undefined) {
-      updates.push(`type = $${paramIndex++}`);
+      updates.push(`type = ?`);
       values.push(request.type);
     }
     if (request.identifier !== undefined) {
-      updates.push(`identifier = $${paramIndex++}`);
+      updates.push(`identifier = ?`);
       values.push(request.identifier);
     }
     if (request.rentalInfo !== undefined) {
-      updates.push(`rental_info = $${paramIndex++}`);
+      updates.push(`rental_info = ?`);
       values.push(request.rentalInfo);
     }
     if (request.assignedVehicleId !== undefined) {
-      updates.push(`assigned_vehicle_id = $${paramIndex++}`);
+      updates.push(`assigned_vehicle_id = ?`);
       values.push(request.assignedVehicleId);
     }
 
@@ -71,50 +77,50 @@ export class ParkingPositionService {
     }
 
     values.push(id);
-    const result = await this.pool.query<ParkingPosition>(
+    const stmt = this.db.prepare(
       `UPDATE parking_positions
-       SET ${updates.join(', ')}
-       WHERE id = $${paramIndex} AND deleted_at IS NULL
-       RETURNING *`,
-      values
+       SET ${updates.join(', ')}, updated_at = datetime('now')
+       WHERE id = ? AND deleted_at IS NULL`
     );
 
-    if (result.rows.length === 0) {
+    const result = stmt.run(...values);
+
+    if (result.changes === 0) {
       throw new Error('Parking position not found');
     }
 
-    return this.mapRow(result.rows[0]);
+    return this.getById(id);
   }
 
-  async getById(id: string): Promise<ParkingPosition> {
-    const result = await this.pool.query<ParkingPosition>(
-      'SELECT * FROM parking_positions WHERE id = $1 AND deleted_at IS NULL',
-      [id]
+  getById(id: string): ParkingPosition {
+    const stmt = this.db.prepare(
+      'SELECT * FROM parking_positions WHERE id = ? AND deleted_at IS NULL'
     );
+    const row = stmt.get(id);
 
-    if (result.rows.length === 0) {
+    if (!row) {
       throw new Error('Parking position not found');
     }
 
-    return this.mapRow(result.rows[0]);
+    return this.mapRow(row as any);
   }
 
-  async getBySite(siteId: string): Promise<ParkingPosition[]> {
-    const result = await this.pool.query<ParkingPosition>(
-      'SELECT * FROM parking_positions WHERE site_id = $1 AND deleted_at IS NULL ORDER BY created_at',
-      [siteId]
+  getBySite(siteId: string): ParkingPosition[] {
+    const stmt = this.db.prepare(
+      'SELECT * FROM parking_positions WHERE site_id = ? AND deleted_at IS NULL ORDER BY created_at'
     );
+    const rows = stmt.all(siteId);
 
-    return result.rows.map(this.mapRow);
+    return rows.map((row) => this.mapRow(row as any));
   }
 
-  async softDelete(id: string): Promise<void> {
-    const result = await this.pool.query(
-      'UPDATE parking_positions SET deleted_at = CURRENT_TIMESTAMP WHERE id = $1 AND deleted_at IS NULL',
-      [id]
+  softDelete(id: string): void {
+    const stmt = this.db.prepare(
+      'UPDATE parking_positions SET deleted_at = datetime(\'now\') WHERE id = ? AND deleted_at IS NULL'
     );
+    const result = stmt.run(id);
 
-    if (result.rowCount === 0) {
+    if (result.changes === 0) {
       throw new Error('Parking position not found');
     }
   }
@@ -123,22 +129,22 @@ export class ParkingPositionService {
    * Find parking positions that contain a given point (x, y)
    * Used to match observations to positions based on location
    */
-  async findPositionAtPoint(
+  findPositionAtPoint(
     lotImageId: string,
     x: number,
     y: number
-  ): Promise<ParkingPosition | null> {
-    const result = await this.pool.query<ParkingPosition>(
+  ): ParkingPosition | null {
+    const stmt = this.db.prepare(
       `SELECT * FROM parking_positions
-       WHERE lot_image_id = $1
+       WHERE lot_image_id = ?
          AND deleted_at IS NULL
-         AND SQRT(POWER(center_x - $2, 2) + POWER(center_y - $3, 2)) <= radius
+         AND ((center_x - ?) * (center_x - ?) + (center_y - ?) * (center_y - ?)) <= (radius * radius)
        ORDER BY radius ASC
-       LIMIT 1`,
-      [lotImageId, x, y]
+       LIMIT 1`
     );
 
-    return result.rows.length > 0 ? this.mapRow(result.rows[0]) : null;
+    const row = stmt.get(lotImageId, x, x, y, y);
+    return row ? this.mapRow(row as any) : null;
   }
 
   /**
