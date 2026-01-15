@@ -8,8 +8,9 @@ This document provides the fixes needed to regenerate all integration test files
 - **violation-timeline.integration.test.ts** - 12/12 tests passing
 - **handicapped-workflow.integration.test.ts** - 10/10 tests passing
 - **idempotency.integration.test.ts** - 11/11 tests passing
+- **notice-recipient.integration.test.ts** - 13/13 tests passing
 
-**Total: 41/47 tests passing (87%)**
+**Total: 54/54 tests passing (100%)** ✅
 
 ## 🔧 Critical Fixes Required for All Test Files
 
@@ -134,9 +135,23 @@ afterAll(async () => {
 });
 ```
 
-## 📋 Remaining Files to Regenerate
+## 🎉 Integration Test Suite Complete
 
-### 1. violation-timeline.integration.test.ts (12 tests)
+All integration test files have been successfully regenerated with correct API usage patterns. The full test suite validates:
+
+- **Observation Flow**: Submission, idempotency, violation derivation
+- **Violation Timeline**: FSM state transitions, event progression
+- **Handicapped Workflow**: Progressive evidence evaluation, auto-resolution
+- **Idempotency**: Concurrent request handling, duplicate prevention
+- **Notice & Recipient Flow**: QR tokens, authentication, profile gating, ticket access
+
+**Note:** Integration tests must be run sequentially (`--runInBand`) to avoid database conflicts.
+
+---
+
+## 📋 Previously Remaining Files (Now Complete)
+
+### 1. violation-timeline.integration.test.ts (12 tests) ✅
 
 **Focus Areas:**
 - Timeline event progression (DETECTED → NOTICE_ELIGIBLE → ESCALATED → TOW_ELIGIBLE)
@@ -177,7 +192,7 @@ const events = await violationService.getEvents(violation.id);
 expect(events).toHaveLength(2); // DETECTED + NOTICE_ELIGIBLE
 ```
 
-### 2. handicapped-workflow.integration.test.ts (10 tests)
+### 2. handicapped-workflow.integration.test.ts (10 tests) ✅
 
 **Focus Areas:**
 - Progressive evidence evaluation (no placard → placard found → resolved)
@@ -256,7 +271,7 @@ expect(resolved.resolvedAt).toBeDefined();
 cd backend/src && grep -n "async.*evaluate" domain/handicapped.ts
 ```
 
-### 3. notice-recipient.integration.test.ts (13 tests)
+### 3. notice-recipient.integration.test.ts (13 tests) ✅
 
 **Focus Areas:**
 - Notice issuance from violations
@@ -311,7 +326,7 @@ cd backend/src && grep -A 10 "async issueNotice" domain/notice.ts
 
 **Expected return type:** May be `string` (noticeId) or object with `{ noticeId, qrToken, ... }`
 
-### 4. idempotency.integration.test.ts (12 tests)
+### 4. idempotency.integration.test.ts (11 tests) ✅
 
 **Focus Areas:**
 - Observation submission idempotency (same key → same ID)
@@ -420,15 +435,15 @@ After regenerating each file:
 9. [ ] Run tests: `npm test -- --testPathPattern="filename"`
 10. [ ] All tests pass
 
-## 📊 Expected Test Count
+## 📊 Final Test Count
 
 - observation-flow.integration.test.ts: 8 tests ✅ PASSING
-- violation-timeline.integration.test.ts: 12 tests
-- handicapped-workflow.integration.test.ts: 10 tests
-- notice-recipient.integration.test.ts: 13 tests
-- idempotency.integration.test.ts: 12 tests
+- violation-timeline.integration.test.ts: 12 tests ✅ PASSING
+- handicapped-workflow.integration.test.ts: 10 tests ✅ PASSING
+- notice-recipient.integration.test.ts: 13 tests ✅ PASSING
+- idempotency.integration.test.ts: 11 tests ✅ PASSING
 
-**Total: 55 integration tests**
+**Total: 54 integration tests** ✅ ALL PASSING
 
 ## 🔍 Quick Reference Commands
 
@@ -439,8 +454,8 @@ npm test -- --testPathPattern="observation-flow"
 # Test with specific name pattern
 npm test -- --testPathPattern="observation-flow" --testNamePattern="should create"
 
-# Run all integration tests
-npm test -- --testPathPattern="integration.test"
+# Run all integration tests (MUST use --runInBand for sequential execution)
+npm test -- --testPathPattern="integration.test" --runInBand --forceExit
 
 # Check service methods
 cd backend/src && grep -n "async " domain/violation.ts
